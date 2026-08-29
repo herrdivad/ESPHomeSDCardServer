@@ -24,6 +24,7 @@
 *.so.*
 
 configs/
+
 # Fortran module files
 *.mod
 *.smod
