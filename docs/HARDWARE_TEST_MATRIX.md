@@ -15,9 +15,14 @@ ESPHome build and log excerpt are recorded.
 | Client/WLAN interruption cleans temporary file | Not run |
 | Two uploads cause one 409 response | Not run |
 | Large streamed download and SHA-256 match | Not run |
+| Initial baseline JPEG renders directly from `S:` using `loop_task_stack_size: 16384` | Needs retest (8 KiB stack overflow observed) |
+| Home Assistant Select switches between mapped JPEG files | Not run |
+| Missing mapped image keeps the previous image and selection | Not run |
+| Browser download still works while direct-image support is enabled | Not run |
+| Upload/delete of an actively read image returns 409 | Not run |
+| Repeated image switching does not grow heap/PSRAM use | Not run |
 | File/delete/directory error behavior | Not run |
 | Traversal, long names, spaces and umlauts | Not run |
 | Invalid API key causes no filesystem operation | Not run |
 | One hour of transfers with both ports active | Not run |
 | Heap, PSRAM, sockets, resets and watchdog logs inspected | Not run |
-

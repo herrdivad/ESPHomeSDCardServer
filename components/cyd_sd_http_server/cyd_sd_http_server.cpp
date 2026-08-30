@@ -15,11 +15,15 @@
 #include "path_utils.h"
 #include "web_ui.h"
 
+#ifdef USE_CYD_SD_LVGL
+#include "misc/cache/instance/lv_image_cache.h"
+#endif
+
 namespace esphome {
 namespace cyd_sd_http_server {
 
 static const char *const TAG = "cyd_sd_http";
-static const char *const SERVER_VERSION = "0.1.1";
+static const char *const SERVER_VERSION = "0.2.0";
 static constexpr size_t STREAM_BUFFER_SIZE = 8192;
 static constexpr size_t MAX_QUERY_LENGTH = 1024;
 static constexpr size_t MAX_LIST_LIMIT = 100;
@@ -127,6 +131,15 @@ void CydSdHttpServer::setup() {
   const esp_err_t mount_error = this->storage_.mount();
   if (mount_error != ESP_OK)
     this->status_set_error(LOG_STR("SD mount failed"));
+#ifdef USE_CYD_SD_LVGL
+  if (mount_error == ESP_OK && !this->display_images_.empty()) {
+    if (!this->register_lvgl_file_system_()) {
+      ESP_LOGE(TAG, "Direct LVGL SD image access could not be initialized");
+    } else if (!this->select_image(this->initial_image_index_)) {
+      ESP_LOGW(TAG, "Initial SD display image is unavailable; keeping the configured LVGL placeholder");
+    }
+  }
+#endif
   if (!this->start_server_()) {
     this->mark_failed(LOG_STR("Native HTTP server failed to start"));
     return;
@@ -151,6 +164,12 @@ void CydSdHttpServer::dump_config() {
   ESP_LOGCONFIG(TAG, "  Upload limit: %" PRIu32 " bytes", this->max_upload_size_);
   ESP_LOGCONFIG(TAG, "  Authentication: enabled");
   ESP_LOGCONFIG(TAG, "  Mounted: %s", YESNO(this->storage_.is_mounted()));
+#ifdef USE_CYD_SD_LVGL
+  ESP_LOGCONFIG(TAG, "  LVGL SD drive: %c:", this->lvgl_drive_letter_);
+  ESP_LOGCONFIG(TAG, "  Display image mappings: %u", static_cast<unsigned>(this->display_images_.size()));
+  for (const auto &image : this->display_images_)
+    ESP_LOGCONFIG(TAG, "    %s -> %c:%s", image.name.c_str(), this->lvgl_drive_letter_, image.virtual_path.c_str());
+#endif
 }
 
 bool CydSdHttpServer::teardown() {
@@ -161,6 +180,144 @@ bool CydSdHttpServer::teardown() {
   this->storage_.unmount();
   return true;
 }
+
+#ifdef USE_CYD_SD_LVGL
+void CydSdImageSelect::control(size_t index) {
+  if (!this->parent_->select_image(index))
+    ESP_LOGW(TAG, "Display image selection index %u failed", static_cast<unsigned>(index));
+}
+
+bool CydSdHttpServer::register_lvgl_file_system_() {
+  if (this->lvgl_fs_registered_)
+    return true;
+  if (lv_fs_get_drv(this->lvgl_drive_letter_) != nullptr) {
+    ESP_LOGE(TAG, "LVGL drive %c: is already registered", this->lvgl_drive_letter_);
+    return false;
+  }
+
+  lv_fs_drv_init(&this->lvgl_fs_driver_);
+  this->lvgl_fs_driver_.letter = this->lvgl_drive_letter_;
+  this->lvgl_fs_driver_.cache_size = 0;
+  this->lvgl_fs_driver_.user_data = this;
+  this->lvgl_fs_driver_.ready_cb = lvgl_ready_cb_;
+  this->lvgl_fs_driver_.open_cb = lvgl_open_cb_;
+  this->lvgl_fs_driver_.close_cb = lvgl_close_cb_;
+  this->lvgl_fs_driver_.read_cb = lvgl_read_cb_;
+  this->lvgl_fs_driver_.seek_cb = lvgl_seek_cb_;
+  this->lvgl_fs_driver_.tell_cb = lvgl_tell_cb_;
+  lv_fs_drv_register(&this->lvgl_fs_driver_);
+  this->lvgl_fs_registered_ = true;
+  ESP_LOGI(TAG, "Registered read-only LVGL SD drive %c:", this->lvgl_drive_letter_);
+  return true;
+}
+
+bool CydSdHttpServer::is_mapped_image_path_(const std::string &virtual_path) const {
+  return std::any_of(this->display_images_.begin(), this->display_images_.end(),
+                     [&virtual_path](const DisplayImage &image) { return image.virtual_path == virtual_path; });
+}
+
+bool CydSdHttpServer::select_image(size_t index) {
+  if (!this->lvgl_fs_registered_ || this->image_widget_ == nullptr || index >= this->display_images_.size())
+    return false;
+
+  const DisplayImage &image = this->display_images_[index];
+  DownloadContext probe;
+  const StorageResult open_result = this->storage_.open_download(image.virtual_path, &probe);
+  if (!open_result.ok()) {
+    ESP_LOGW(TAG, "Cannot select SD image %s: %s", image.virtual_path.c_str(),
+             storage_error_message(open_result.error));
+    return false;
+  }
+  const StorageResult close_result = this->storage_.close_download(&probe);
+  if (!close_result.ok()) {
+    ESP_LOGW(TAG, "Cannot close SD image probe %s: %s", image.virtual_path.c_str(),
+             storage_error_message(close_result.error));
+    return false;
+  }
+
+  if (!this->active_lvgl_source_.empty())
+    lv_image_cache_drop(this->active_lvgl_source_.c_str());
+  this->active_lvgl_source_ = std::string(1, this->lvgl_drive_letter_) + ":" + image.virtual_path;
+  ::lv_image_set_src(this->image_widget_, this->active_lvgl_source_.c_str());
+  lv_obj_invalidate(this->image_widget_);
+  this->selected_image_index_ = index;
+  if (this->image_select_ != nullptr)
+    this->image_select_->publish_state(index);
+  ESP_LOGI(TAG, "Display image selected: %s (%s)", image.name.c_str(), this->active_lvgl_source_.c_str());
+  return true;
+}
+
+bool CydSdHttpServer::lvgl_ready_cb_(lv_fs_drv_t *driver) {
+  auto *server = static_cast<CydSdHttpServer *>(driver->user_data);
+  return server != nullptr && server->storage_.is_mounted();
+}
+
+void *CydSdHttpServer::lvgl_open_cb_(lv_fs_drv_t *driver, const char *path, lv_fs_mode_t mode) {
+  auto *server = static_cast<CydSdHttpServer *>(driver->user_data);
+  if (server == nullptr || path == nullptr || (mode & LV_FS_MODE_RD) == 0 || (mode & LV_FS_MODE_WR) != 0)
+    return nullptr;
+
+  std::string requested(path);
+  if (requested.empty() || requested.front() != '/')
+    requested.insert(requested.begin(), '/');
+  std::string normalized;
+  if (normalize_virtual_path(requested, false, &normalized) != PathError::NONE ||
+      !server->is_mapped_image_path_(normalized))
+    return nullptr;
+
+  auto *context = new (std::nothrow) DownloadContext();
+  if (context == nullptr)
+    return nullptr;
+  const StorageResult result = server->storage_.open_download(normalized, context);
+  if (!result.ok()) {
+    delete context;
+    return nullptr;
+  }
+  return context;
+}
+
+lv_fs_res_t CydSdHttpServer::lvgl_close_cb_(lv_fs_drv_t *driver, void *file) {
+  auto *server = static_cast<CydSdHttpServer *>(driver->user_data);
+  auto *context = static_cast<DownloadContext *>(file);
+  if (server == nullptr || context == nullptr)
+    return LV_FS_RES_INV_PARAM;
+  const StorageResult result = server->storage_.close_download(context);
+  delete context;
+  return result.ok() ? LV_FS_RES_OK : LV_FS_RES_FS_ERR;
+}
+
+lv_fs_res_t CydSdHttpServer::lvgl_read_cb_(lv_fs_drv_t *driver, void *file, void *buffer, uint32_t bytes_to_read,
+                                           uint32_t *bytes_read) {
+  auto *server = static_cast<CydSdHttpServer *>(driver->user_data);
+  auto *context = static_cast<DownloadContext *>(file);
+  if (server == nullptr || context == nullptr || buffer == nullptr || bytes_read == nullptr)
+    return LV_FS_RES_INV_PARAM;
+  size_t actual = 0;
+  const StorageResult result =
+      server->storage_.read_download(context, static_cast<uint8_t *>(buffer), bytes_to_read, &actual);
+  *bytes_read = static_cast<uint32_t>(actual);
+  return result.ok() ? LV_FS_RES_OK : LV_FS_RES_FS_ERR;
+}
+
+lv_fs_res_t CydSdHttpServer::lvgl_seek_cb_(lv_fs_drv_t *driver, void *file, uint32_t position,
+                                           lv_fs_whence_t whence) {
+  auto *server = static_cast<CydSdHttpServer *>(driver->user_data);
+  auto *context = static_cast<DownloadContext *>(file);
+  if (server == nullptr || context == nullptr)
+    return LV_FS_RES_INV_PARAM;
+  if (whence != LV_FS_SEEK_SET)
+    return LV_FS_RES_NOT_IMP;
+  return server->storage_.seek_download(context, position).ok() ? LV_FS_RES_OK : LV_FS_RES_FS_ERR;
+}
+
+lv_fs_res_t CydSdHttpServer::lvgl_tell_cb_(lv_fs_drv_t *driver, void *file, uint32_t *position) {
+  auto *server = static_cast<CydSdHttpServer *>(driver->user_data);
+  auto *context = static_cast<DownloadContext *>(file);
+  if (server == nullptr || context == nullptr || position == nullptr)
+    return LV_FS_RES_INV_PARAM;
+  return server->storage_.tell_download(context, position).ok() ? LV_FS_RES_OK : LV_FS_RES_FS_ERR;
+}
+#endif
 
 bool CydSdHttpServer::start_server_() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();

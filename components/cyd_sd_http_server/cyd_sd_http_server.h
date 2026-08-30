@@ -2,14 +2,24 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "esp_http_server.h"
 #include "esphome/core/component.h"
 #include "freertos/task.h"
 #include "sd_storage.h"
 
+#ifdef USE_CYD_SD_LVGL
+#include "esphome/components/select/select.h"
+#include <lvgl.h>
+#endif
+
 namespace esphome {
 namespace cyd_sd_http_server {
+
+#ifdef USE_CYD_SD_LVGL
+class CydSdImageSelect;
+#endif
 
 class CydSdHttpServer : public Component {
  public:
@@ -28,6 +38,17 @@ class CydSdHttpServer : public Component {
   void set_data3_pin(int value) { this->data3_pin_ = value; }
   void set_max_upload_size(uint32_t value) { this->max_upload_size_ = value; }
   void set_api_key(const std::string &value) { this->api_key_ = value; }
+
+#ifdef USE_CYD_SD_LVGL
+  void set_image_widget(lv_obj_t *widget) { this->image_widget_ = widget; }
+  void set_lvgl_drive_letter(const std::string &value) { this->lvgl_drive_letter_ = value[0]; }
+  void add_display_image(const std::string &name, const std::string &path) {
+    this->display_images_.push_back({name, path});
+  }
+  void set_initial_image(size_t index) { this->initial_image_index_ = index; }
+  void set_image_select(CydSdImageSelect *image_select) { this->image_select_ = image_select; }
+  bool select_image(size_t index);
+#endif
 
   void setup() override;
   void dump_config() override;
@@ -80,6 +101,23 @@ class CydSdHttpServer : public Component {
   static esp_err_t delete_directory_handler_(httpd_req_t *request);
   static esp_err_t options_handler_(httpd_req_t *request);
 
+#ifdef USE_CYD_SD_LVGL
+  struct DisplayImage {
+    std::string name;
+    std::string virtual_path;
+  };
+
+  bool register_lvgl_file_system_();
+  bool is_mapped_image_path_(const std::string &virtual_path) const;
+  static bool lvgl_ready_cb_(lv_fs_drv_t *driver);
+  static void *lvgl_open_cb_(lv_fs_drv_t *driver, const char *path, lv_fs_mode_t mode);
+  static lv_fs_res_t lvgl_close_cb_(lv_fs_drv_t *driver, void *file);
+  static lv_fs_res_t lvgl_read_cb_(lv_fs_drv_t *driver, void *file, void *buffer, uint32_t bytes_to_read,
+                                   uint32_t *bytes_read);
+  static lv_fs_res_t lvgl_seek_cb_(lv_fs_drv_t *driver, void *file, uint32_t position, lv_fs_whence_t whence);
+  static lv_fs_res_t lvgl_tell_cb_(lv_fs_drv_t *driver, void *file, uint32_t *position);
+#endif
+
   uint16_t port_{8080};
   uint16_t control_port_{32769};
   std::string mount_point_{"/sdcard"};
@@ -100,7 +138,30 @@ class CydSdHttpServer : public Component {
   volatile bool stop_requested_{false};
   uint32_t request_counter_{0};
   SdStorage storage_;
+
+#ifdef USE_CYD_SD_LVGL
+  lv_obj_t *image_widget_{nullptr};
+  CydSdImageSelect *image_select_{nullptr};
+  char lvgl_drive_letter_{'S'};
+  lv_fs_drv_t lvgl_fs_driver_{};
+  bool lvgl_fs_registered_{false};
+  std::vector<DisplayImage> display_images_;
+  size_t initial_image_index_{0};
+  size_t selected_image_index_{0};
+  std::string active_lvgl_source_;
+#endif
 };
+
+#ifdef USE_CYD_SD_LVGL
+class CydSdImageSelect : public select::Select {
+ public:
+  explicit CydSdImageSelect(CydSdHttpServer *parent) : parent_(parent) {}
+
+ protected:
+  void control(size_t index) override;
+  CydSdHttpServer *parent_;
+};
+#endif
 
 }  // namespace cyd_sd_http_server
 }  // namespace esphome

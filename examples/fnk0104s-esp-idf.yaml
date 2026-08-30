@@ -8,12 +8,19 @@ esp32:
   framework:
     type: esp-idf
     advanced:
+      # LVGL's Tiny JPEG decoder needs a 4 KiB temporary stack buffer while
+      # rendering a direct S:/ image. 8 KiB is too small once LVGL, FATFS and
+      # the SDMMC call chain are below it.
+      loop_task_stack_size: 16384
       include_builtin_idf_components:
         - fatfs
       disable_vfs_support_termios: false
       disable_vfs_support_select: false
       disable_vfs_support_dir: false
     sdkconfig_options:
+      # Keep FAT32 long file names (up to 255 characters) working. FatFS uses
+      # a temporary LFN buffer on the calling task stack, covered by the 16 KiB
+      # loop-task stack configured above.
       CONFIG_FATFS_LFN_STACK: "y"
 
 psram:
@@ -56,3 +63,80 @@ cyd_sd_http_server:
   max_upload_size: 200MB
   api_key: !secret sd_server_api_key
 
+  # Optional direct SD-to-LVGL image access. The select entity is exposed as a
+  # Home Assistant dropdown through the normal ESPHome API. Use baseline JPEG
+  # or an LVGL 9.5-compatible BIN image; PNG is not supported here.
+  display_image:
+    image_widget: sd_display_image
+    drive_letter: S
+    initial_image: Bild 1
+    images:
+      - name: Bild 1
+        path: /Bild1.jpg
+      - name: Bild 2
+        path: /images/Bild2.jpg
+    select:
+      id: sd_display_image_select
+      name: Display image
+
+# Display bus of the FNK0104S.
+spi:
+  id: lcd_spi
+  clk_pin: GPIO12
+  mosi_pin: GPIO11
+
+display:
+  - platform: mipi_spi
+    id: cyd_display
+    spi_id: lcd_spi
+    model: ST7796
+    cs_pin: GPIO10
+    dc_pin: GPIO46
+    dimensions: 320x480
+    data_rate: 40MHz
+    color_order: bgr
+    invert_colors: true
+    color_depth: 16
+    update_interval: never
+    auto_clear_enabled: false
+
+# ESPHome currently requires an initial image ID when declaring an LVGL image
+# widget. This one-pixel asset is replaced by the selected S:/ file during
+# setup and does not allocate a full-screen runtime image buffer.
+image:
+  - platform: file
+    file: assets/sd-image-placeholder.svg
+    id: sd_image_placeholder
+    type: RGB565
+    resize: 1x1
+
+lvgl:
+  displays:
+    - cyd_display
+  buffer_size: 25%
+  pages:
+    - id: image_page
+      bg_color: 0x000000
+      widgets:
+        - image:
+            id: sd_display_image
+            src: sd_image_placeholder
+            # The selected SD image is drawn inside this widget. Match its size
+            # to the prepared image to avoid scaling/cropping surprises.
+            x: 0
+            y: 0
+            width: 320
+            height: 480
+
+output:
+  - platform: ledc
+    id: backlight_pwm
+    pin: GPIO45
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    id: display_backlight
+    name: Touchscreen Backlight
+    output: backlight_pwm
+    restore_mode: ALWAYS_ON

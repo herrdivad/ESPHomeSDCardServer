@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,7 @@ enum class StorageError {
   NOT_A_DIRECTORY,
   OPEN_FAILED,
   READ_FAILED,
+  SEEK_FAILED,
   WRITE_FAILED,
   SHORT_WRITE,
   FLUSH_FAILED,
@@ -81,6 +83,7 @@ struct DownloadContext {
   std::string virtual_path;
   uint64_t size{0};
   uint64_t bytes_read{0};
+  bool reader_registered{false};
 };
 
 const char *storage_error_to_string(StorageError error);
@@ -113,12 +116,16 @@ class SdStorage {
 
   StorageResult open_download(const std::string &virtual_path, DownloadContext *context);
   StorageResult read_download(DownloadContext *context, uint8_t *buffer, size_t capacity, size_t *bytes_read);
+  StorageResult seek_download(DownloadContext *context, uint32_t position);
+  StorageResult tell_download(DownloadContext *context, uint32_t *position);
   StorageResult close_download(DownloadContext *context);
 
  private:
   StorageResult cleanup_stale_files_();
   StorageResult cleanup_directory_(const std::string &physical_path, size_t depth);
   void release_upload_(UploadContext *context);
+  bool path_has_active_reader_(const std::string &virtual_path, bool include_descendants = false) const;
+  void release_reader_(DownloadContext *context);
   std::string make_backup_path_(const std::string &target, uint32_t request_id) const;
 
   std::string mount_point_{"/sdcard"};
@@ -133,6 +140,7 @@ class SdStorage {
   int data3_pin_{-1};
   bool mounted_{false};
   volatile bool upload_active_{false};
+  std::map<std::string, size_t> active_readers_;
   sdmmc_card_t *card_{nullptr};
   SemaphoreHandle_t mutex_{nullptr};
   SemaphoreHandle_t upload_mutex_{nullptr};
@@ -140,4 +148,3 @@ class SdStorage {
 
 }  // namespace cyd_sd_http_server
 }  // namespace esphome
-

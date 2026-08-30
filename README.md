@@ -7,7 +7,7 @@ file uploads never use multipart handling or firmware-OTA internals.
 
 ## Support status
 
-This first implementation targets only:
+This implementation targets only:
 
 - Freenove FNK0104S / ESP32-S3R8
 - ESPHome 2026.8.0
@@ -15,11 +15,12 @@ This first implementation targets only:
 - 8 MB octal PSRAM at 80 MHz
 - four-bit SDMMC: CLK 38, CMD 40, D0 39, D1 41, D2 48, D3 47
 
-It has been validated and host-tested locally, but **has not been run on real
-hardware yet**. It must not be described as production-ready until the open
-[hardware matrix](docs/HARDWARE_TEST_MATRIX.md) has been completed. Arduino,
-other ESP32 variants, other boards, SPI SD cards, hotplug, TLS and public
-internet exposure are unsupported.
+It has been host-tested locally and has reached the first FNK0104S hardware
+boot test. That test identified the required 16 KiB `loopTask` stack for direct
+JPEG rendering; functional and endurance tests remain open in the
+[hardware matrix](docs/HARDWARE_TEST_MATRIX.md). Arduino, other ESP32 variants,
+other boards, SPI SD cards, hotplug, TLS and public internet exposure are
+unsupported.
 
 ## Features
 
@@ -35,6 +36,11 @@ internet exposure are unsupported.
 - recoverable overwrite backup; stale uploads are removed and interrupted
   overwrite backups are restored during boot
 - embedded, same-origin UI without CDNs; API key lives only in `sessionStorage`
+- optional read-only LVGL `S:` drive backed by the same mounted `SdStorage`
+- direct, incremental baseline-JPEG and LVGL-BIN rendering from SD without an
+  `online_image` full-frame runtime buffer
+- a static YAML name-to-path allow-list exposed as an ESPHome Select entity for
+  changing the displayed image from Home Assistant
 - streaming Python uploader and an explicit real-device smoke-test script
 
 ## Configuration
@@ -52,6 +58,7 @@ external_components:
       path: ../components
 
 cyd_sd_http_server:
+  id: cyd_sd_server
   port: 8080
   control_port: 32769
   mount_point: /sdcard
@@ -66,6 +73,18 @@ cyd_sd_http_server:
   data3_pin: GPIO47
   max_upload_size: 200MB
   api_key: !secret sd_server_api_key
+  display_image:
+    image_widget: sd_display_image
+    drive_letter: S
+    initial_image: Bild 1
+    images:
+      - name: Bild 1
+        path: /Bild1.jpg
+      - name: Bild 2
+        path: /images/Bild2.jpg
+    select:
+      id: sd_display_image_select
+      name: Display image
 ```
 
 `format_if_mount_failed` defaults to false. Do not enable it casually: an
@@ -73,10 +92,91 @@ unknown or damaged filesystem could otherwise be reformatted. Internal pull-ups
 only supplement suitable board-level pull-ups. The example upload limit is a
 starting value, not a hardware-tested recommendation.
 
+### Direct SD images and the Home Assistant dropdown
+
+`display_image` is optional. When configured, the component registers a
+read-only LVGL drive (default `S:`), connects it to the named LVGL image widget,
+and creates the configured ESPHome Select entity. Home Assistant discovers that
+entity through the normal ESPHome API and shows `Bild 1`, `Bild 2`, and the
+other configured names as dropdown options. Selecting an option changes the
+widget source to the mapped SD path, for example `S:/Bild1.jpg`; the path itself
+is not supplied by Home Assistant.
+
+The complete display, placeholder widget, and mapping are shown in
+[the FNK0104S example](examples/fnk0104s-esp-idf.yaml). The one-pixel compiled
+placeholder is necessary because ESPHome requires an initial `src` for the LVGL
+image widget. It is replaced during setup and does not allocate a full-screen
+runtime image.
+
+For the full build-to-display flow, including the generated Home Assistant
+dropdown and live SD reads, see
+[Direct SD Image Workflow](docs/DIRECT_SD_IMAGE_WORKFLOW.md).
+
+This first direct-image implementation accepts:
+
+- `.jpg` and `.jpeg`: baseline JPEG decoded incrementally by LVGL Tiny JPEG;
+- `.bin`: an LVGL 9.5-compatible binary image asset.
+
+Progressive JPEG and PNG are not supported by this path. Convert photographs to
+baseline JPEG at the display's intended dimensions (320 x 480 in the example).
+LVGL still uses its display draw buffer, decoder work memory, and small file
+buffers, but it does not retain the complete JPEG source or a permanent
+307,200-byte RGB565 `online_image` buffer.
+
+The reference FNK0104S build with this feature occupies about 1.20 MiB of its
+1.835 MiB OTA application partition (about 66%), leaving roughly 0.63 MiB for
+normal ESPHome entities, automations, and display work. The 16 KiB stack
+setting adds 8 KiB of internal RAM compared with the default and has no
+meaningful flash impact. Much larger features such as a camera, voice stack,
+TLS-heavy integrations, or additional media decoders should be compiled and
+checked against the same partition budget before being added.
+
+Names and paths must be unique. Paths must be normalized absolute virtual paths
+and may not contain traversal, reserved upload/backup names, or unsupported
+extensions. The configured initial image must be one of the mapped names. If a
+selected file is missing or busy, the component keeps the previous image and
+does not publish the failed selection.
+
+All HTTP functions remain available when direct images are enabled. Browser and
+command-line downloads still use fixed `Content-Length` and 8 KiB streaming.
+LVGL and HTTP share the same synchronized storage service; replacing or deleting
+a file that currently has an active reader returns `409 Conflict` instead of
+invalidating that reader.
+
 The component registers its second listener, control socket and four client
 sockets with ESPHome's socket accounting. With the complete example ESPHome
 therefore calculates `CONFIG_LWIP_MAX_SOCKETS` rather than silently relying on
 the smaller default.
+
+### Required ESP32 framework settings
+
+When `display_image` uses direct JPEG files, configure the ESPHome main loop
+task with 16 KiB of stack:
+
+```yaml
+esp32:
+  framework:
+    type: esp-idf
+    advanced:
+      loop_task_stack_size: 16384
+      include_builtin_idf_components:
+        - fatfs
+    sdkconfig_options:
+      CONFIG_FATFS_LFN_STACK: "y"
+```
+
+The default 8 KiB task stack overflows when the LVGL Tiny JPEG decoder's 4 KiB
+temporary buffer is combined with the LVGL, FATFS and SDMMC call chain. The
+16 KiB setting reserves an extra 8 KiB of internal RAM once; it is not a
+full-screen image buffer and does not grow with the image size.
+
+`CONFIG_FATFS_LFN_STACK: "y"` enables normal FAT32 long file names (LFN), such
+as names longer than 8.3 characters or names containing spaces. It allocates
+FatFS's temporary LFN buffer on the calling task stack (roughly 512 bytes with
+the default 255-character limit). Keep this setting: the server accepts paths
+up to 255 UTF-8 bytes and its file UI supports ordinary long names. It was not
+the root cause of the JPEG crash; the 16 KiB task stack covers both it and the
+JPEG decoder.
 
 ## HTTP API
 

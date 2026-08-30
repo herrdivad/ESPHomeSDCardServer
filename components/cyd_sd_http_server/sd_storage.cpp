@@ -71,6 +71,7 @@ const char *storage_error_to_string(StorageError error) {
     case StorageError::NOT_A_DIRECTORY: return "NOT_A_DIRECTORY";
     case StorageError::OPEN_FAILED: return "OPEN_FAILED";
     case StorageError::READ_FAILED: return "READ_FAILED";
+    case StorageError::SEEK_FAILED: return "SEEK_FAILED";
     case StorageError::WRITE_FAILED: return "WRITE_FAILED";
     case StorageError::SHORT_WRITE: return "SHORT_WRITE";
     case StorageError::FLUSH_FAILED: return "FLUSH_FAILED";
@@ -97,6 +98,7 @@ const char *storage_error_message(StorageError error) {
     case StorageError::NOT_A_DIRECTORY: return "Path is not a directory";
     case StorageError::OPEN_FAILED: return "File could not be opened";
     case StorageError::READ_FAILED: return "SD card read failed";
+    case StorageError::SEEK_FAILED: return "SD card seek failed";
     case StorageError::WRITE_FAILED: return "SD card write failed";
     case StorageError::SHORT_WRITE: return "SD card accepted fewer bytes than requested";
     case StorageError::FLUSH_FAILED: return "File flush failed";
@@ -105,7 +107,7 @@ const char *storage_error_message(StorageError error) {
     case StorageError::DELETE_FAILED: return "Delete failed";
     case StorageError::CREATE_DIRECTORY_FAILED: return "Directory creation failed";
     case StorageError::NO_SPACE: return "Not enough free space";
-    case StorageError::BUSY: return "Another upload is active";
+    case StorageError::BUSY: return "SD card operation conflicts with an active reader or upload";
     case StorageError::SIZE_MISMATCH: return "Stored size differs from Content-Length";
     case StorageError::LIST_LIMIT_REACHED: return "Directory result limit reached";
   }
@@ -191,6 +193,10 @@ void SdStorage::unmount() {
   MutexLock lock(this->mutex_);
   if (!this->mounted_)
     return;
+  if (!this->active_readers_.empty()) {
+    ESP_LOGW(TAG, "SD unmount deferred: %u active reader(s)", static_cast<unsigned>(this->active_readers_.size()));
+    return;
+  }
   const esp_err_t error = esp_vfs_fat_sdcard_unmount(this->mount_point_.c_str(), this->card_);
   if (error != ESP_OK)
     ESP_LOGE(TAG, "SD unmount failed: %s", esp_err_to_name(error));
@@ -299,6 +305,8 @@ StorageResult SdStorage::delete_directory(const std::string &virtual_path) {
     return failure(StorageError::NOT_MOUNTED);
   if (this->upload_active_)
     return failure(StorageError::BUSY);
+  if (this->path_has_active_reader_(virtual_path, true))
+    return failure(StorageError::BUSY);
   const std::string physical = join_mount_path(this->mount_point_, virtual_path);
   struct stat info {};
   if (stat(physical.c_str(), &info) != 0)
@@ -318,6 +326,8 @@ StorageResult SdStorage::delete_file(const std::string &virtual_path) {
   if (!this->mounted_)
     return failure(StorageError::NOT_MOUNTED);
   if (this->upload_active_)
+    return failure(StorageError::BUSY);
+  if (this->path_has_active_reader_(virtual_path))
     return failure(StorageError::BUSY);
   const std::string physical = join_mount_path(this->mount_point_, virtual_path);
   struct stat info {};
@@ -351,6 +361,10 @@ StorageResult SdStorage::begin_upload(const std::string &virtual_path, bool over
   if (!this->mounted_) {
     this->release_upload_(context);
     return failure(StorageError::NOT_MOUNTED);
+  }
+  if (this->path_has_active_reader_(virtual_path)) {
+    this->release_upload_(context);
+    return failure(StorageError::BUSY);
   }
   const std::string target = join_mount_path(this->mount_point_, virtual_path);
   struct stat target_stat {};
@@ -515,6 +529,8 @@ StorageResult SdStorage::open_download(const std::string &virtual_path, Download
   context->virtual_path = virtual_path;
   context->size = info.st_size;
   context->bytes_read = 0;
+  context->reader_registered = true;
+  this->active_readers_[virtual_path]++;
   return StorageResult::success();
 }
 
@@ -531,17 +547,74 @@ StorageResult SdStorage::read_download(DownloadContext *context, uint8_t *buffer
   return StorageResult::success(context->bytes_read);
 }
 
+StorageResult SdStorage::seek_download(DownloadContext *context, uint32_t position) {
+  MutexLock lock(this->mutex_);
+  if (context == nullptr || context->file == nullptr)
+    return failure(StorageError::SEEK_FAILED, EBADF);
+  if (position > context->size)
+    return failure(StorageError::SEEK_FAILED, EINVAL, context->bytes_read);
+  if (fseek(context->file, static_cast<long>(position), SEEK_SET) != 0)
+    return failure(StorageError::SEEK_FAILED, errno, context->bytes_read);
+  context->bytes_read = position;
+  return StorageResult::success(context->bytes_read);
+}
+
+StorageResult SdStorage::tell_download(DownloadContext *context, uint32_t *position) {
+  MutexLock lock(this->mutex_);
+  if (context == nullptr || context->file == nullptr || position == nullptr)
+    return failure(StorageError::SEEK_FAILED, EINVAL);
+  const long current = ftell(context->file);
+  if (current < 0)
+    return failure(StorageError::SEEK_FAILED, errno, context->bytes_read);
+  *position = static_cast<uint32_t>(current);
+  return StorageResult::success(*position);
+}
+
 StorageResult SdStorage::close_download(DownloadContext *context) {
   MutexLock lock(this->mutex_);
-  if (context->file == nullptr)
+  if (context == nullptr)
+    return StorageResult::success();
+  if (context->file == nullptr) {
+    this->release_reader_(context);
     return StorageResult::success(context->bytes_read);
+  }
   if (fclose(context->file) != 0) {
     const int saved_errno = errno;
     context->file = nullptr;
+    this->release_reader_(context);
     return failure(StorageError::CLOSE_FAILED, saved_errno, context->bytes_read);
   }
   context->file = nullptr;
+  this->release_reader_(context);
   return StorageResult::success(context->bytes_read);
+}
+
+bool SdStorage::path_has_active_reader_(const std::string &virtual_path, bool include_descendants) const {
+  for (const auto &reader : this->active_readers_) {
+    if (reader.second == 0)
+      continue;
+    if (reader.first == virtual_path)
+      return true;
+    if (include_descendants && virtual_path == "/")
+      return true;
+    if (include_descendants && reader.first.size() > virtual_path.size() &&
+        reader.first.compare(0, virtual_path.size(), virtual_path) == 0 && reader.first[virtual_path.size()] == '/')
+      return true;
+  }
+  return false;
+}
+
+void SdStorage::release_reader_(DownloadContext *context) {
+  if (!context->reader_registered)
+    return;
+  const auto reader = this->active_readers_.find(context->virtual_path);
+  if (reader != this->active_readers_.end()) {
+    if (reader->second > 1)
+      reader->second--;
+    else
+      this->active_readers_.erase(reader);
+  }
+  context->reader_registered = false;
 }
 
 StorageResult SdStorage::cleanup_stale_files_() { return this->cleanup_directory_(this->mount_point_, 0); }
