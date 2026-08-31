@@ -20,6 +20,15 @@
   the file body in 8 KiB blocks. This avoids the incompatible combination of
   `Content-Length` and `Transfer-Encoding: chunked`, retains bounded memory use,
   and supports clients that require a known response size to finish decoding.
+- The optional LVGL path uses a per-open-file read cache (16 kB by default) to
+  combine small decoder reads before they reach FATFS/SDMMC.
+- Decoded image caching is opt-out, allocated on demand, strictly PSRAM-only,
+  capped at 1 MB by default, and uses least-recently-used eviction. The active
+  LVGL descriptor is never evicted. A failed allocation or missing PSRAM falls
+  back to the original `S:/` streaming path instead of consuming internal RAM.
+- Cache invalidation uses a generation counter for mapped upload, overwrite,
+  and delete operations. The HTTP response format and browser transfer path do
+  not depend on the decoded cache.
 
 ## Confirmed from `ESPHOME_PINOUT.md`, not yet tested on hardware
 
@@ -33,5 +42,9 @@ signals.
 - SDMMC four-bit stability and the exact card/FAT32 combinations in use.
 - Rename and power-loss behavior of the deployed ESP-IDF/FATFS version.
 - Socket/heap behavior with both HTTP servers active for at least one hour.
+- Page-switch timing for PSRAM cache misses and hits, including whether the
+  300-500 ms target is reached after LVGL and display-SPI flushing.
+- PSRAM fragmentation and LRU behavior during repeated image replacement and
+  selection.
 - Whether 200 MB is the desired production upload limit.
 - File timestamps are best-effort only until time synchronization is configured.

@@ -18,9 +18,16 @@ ESPHome build and log excerpt are recorded.
 | Initial baseline JPEG renders directly from `S:` using `loop_task_stack_size: 16384` | Needs retest (8 KiB stack overflow observed) |
 | Home Assistant Select switches between mapped JPEG files | Not run |
 | Missing mapped image keeps the previous image and selection | Not run |
+| First cache miss decodes one 480 x 320 image into PSRAM | Not run |
+| Re-selecting a cached image logs `HIT` without another SD decode | Not run |
+| Leaving and returning to the image page redraws in 300-500 ms or less | Not run |
+| Fourth full-screen image evicts the least recently used inactive entry | Not run |
+| Decoded cache remains at or below the configured 1 MB limit | Not run |
+| `max_size: 0` and unavailable PSRAM use the `S:/` streaming fallback | Not run |
+| Upload/overwrite/delete invalidates mapped cached image data | Not run |
 | Browser download still works while direct-image support is enabled | Not run |
 | Upload/delete of an actively read image returns 409 | Not run |
-| Repeated image switching does not grow heap/PSRAM use | Not run |
+| Repeated image switching does not grow heap/PSRAM beyond configured caches | Not run |
 | File/delete/directory error behavior | Not run |
 | Traversal, long names, spaces and umlauts | Not run |
 | Invalid API key causes no filesystem operation | Not run |

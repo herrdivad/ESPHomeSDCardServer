@@ -28,7 +28,8 @@ unsupported.
 - required `X-API-Key` with a constant-work comparison
 - health, paginated directory listing, streamed download, streamed raw upload,
   file delete, directory create and empty-directory delete
-- 8 KiB transfer buffers; files are never loaded completely into RAM/PSRAM
+- 8 KiB HTTP transfer buffers; HTTP uploads and downloads never load complete
+  files into RAM/PSRAM
 - centralized percent decoding and path validation
 - one upload at a time, explicit `Content-Length`, configurable size limit and
   preflight free-space check
@@ -37,8 +38,10 @@ unsupported.
   overwrite backups are restored during boot
 - embedded, same-origin UI without CDNs; API key lives only in `sessionStorage`
 - optional read-only LVGL `S:` drive backed by the same mounted `SdStorage`
-- direct, incremental baseline-JPEG and LVGL-BIN rendering from SD without an
-  `online_image` full-frame runtime buffer
+- direct baseline-JPEG and LVGL-BIN rendering from SD without the local HTTP
+  loop used by `online_image`
+- configurable 16 kB LVGL file-read cache plus an optional, dynamically
+  allocated PSRAM LRU cache capped at 1 MB for decoded RGB565 frames
 - a static YAML name-to-path allow-list exposed as an ESPHome Select entity for
   changing the displayed image from Home Assistant
 - streaming Python uploader and an explicit real-device smoke-test script
@@ -77,6 +80,11 @@ cyd_sd_http_server:
     image_widget: sd_display_image
     drive_letter: S
     initial_image: Bild 1
+    cache:
+      max_size: 1MB
+      file_buffer_size: 16kB
+      memory: psram
+      strategy: lru
     images:
       - name: Bild 1
         path: /Bild1.jpg
@@ -99,8 +107,9 @@ read-only LVGL drive (default `S:`), connects it to the named LVGL image widget,
 and creates the configured ESPHome Select entity. Home Assistant discovers that
 entity through the normal ESPHome API and shows `Bild 1`, `Bild 2`, and the
 other configured names as dropdown options. Selecting an option changes the
-widget source to the mapped SD path, for example `S:/Bild1.jpg`; the path itself
-is not supplied by Home Assistant.
+widget source to a decoded PSRAM descriptor when caching succeeds, or to the
+mapped SD path such as `S:/Bild1.jpg` in streaming fallback mode. The path
+itself is not supplied by Home Assistant.
 
 The complete display, placeholder widget, and mapping are shown in
 [the FNK0104S example](examples/fnk0104s-esp-idf.yaml). The one-pixel compiled
@@ -119,13 +128,31 @@ This first direct-image implementation accepts:
 
 Progressive JPEG and PNG are not supported by this path. Convert photographs to
 baseline JPEG at the display's intended dimensions (320 x 480 in the example).
-LVGL still uses its display draw buffer, decoder work memory, and small file
-buffers, but it does not retain the complete JPEG source or a permanent
-307,200-byte RGB565 `online_image` buffer.
 
-The reference FNK0104S build with this feature occupies about 1.20 MiB of its
-1.835 MiB OTA application partition (about 66%), leaving roughly 0.63 MiB for
-normal ESPHome entities, automations, and display work. The 16 KiB stack
+The `cache` block is optional and defaults to the values shown above. It does
+not reserve 1 MB at boot. The component allocates decoded RGB565 frames from
+PSRAM on demand and evicts the least recently used inactive frame before the
+configured limit would be exceeded. A 480 x 320 or 320 x 480 RGB565 frame uses
+307,200 bytes, so the default 1 MB budget holds three full-screen images. Cache
+hits avoid reading and decoding the image body (a small existence probe still
+opens the mapped SD file); the display still has to copy the frame through LVGL
+and SPI. The first load remains a decode operation.
+
+`file_buffer_size` belongs to each LVGL image file while it is open. It turns
+the BIN decoder's small line reads into fewer larger FATFS/SDMMC reads and also
+helps incremental JPEG input. Set `max_size: 0` to disable decoded-frame
+caching, or `file_buffer_size: 0` to restore uncached LVGL file reads. The
+decoded cache never falls back to internal RAM: when PSRAM is absent or an
+allocation fails, the component logs the reason and uses the original
+`S:/...` streaming path.
+
+Replacing or deleting a mapped image through the HTTP API invalidates the
+decoded generation. The currently displayed pixels remain valid, but the next
+selection reloads the changed file instead of returning stale cached data.
+
+The reference FNK0104S example build with this feature occupies about 1.10 MB
+of its 1.835 MB OTA application partition (about 60%), leaving roughly 0.74 MB
+for normal ESPHome entities, automations, and display work. The 16 KiB stack
 setting adds 8 KiB of internal RAM compared with the default and has no
 meaningful flash impact. Much larger features such as a camera, voice stack,
 TLS-heavy integrations, or additional media decoders should be compiled and
@@ -137,8 +164,9 @@ extensions. The configured initial image must be one of the mapped names. If a
 selected file is missing or busy, the component keeps the previous image and
 does not publish the failed selection.
 
-All HTTP functions remain available when direct images are enabled. Browser and
-command-line downloads still use fixed `Content-Length` and 8 KiB streaming.
+All HTTP functions remain available when direct images and their PSRAM cache
+are enabled. Browser and command-line downloads still use fixed
+`Content-Length` and 8 KiB streaming.
 LVGL and HTTP share the same synchronized storage service; replacing or deleting
 a file that currently has an active reader returns `409 Conflict` instead of
 invalidating that reader.

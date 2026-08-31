@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,6 +44,8 @@ class CydSdHttpServer : public Component {
 #ifdef USE_CYD_SD_LVGL
   void set_image_widget(lv_obj_t *widget) { this->image_widget_ = widget; }
   void set_lvgl_drive_letter(const std::string &value) { this->lvgl_drive_letter_ = value[0]; }
+  void set_decoded_image_cache_size(size_t value) { this->decoded_image_cache_size_ = value; }
+  void set_lvgl_file_cache_size(size_t value) { this->lvgl_file_cache_size_ = value; }
   void add_display_image(const std::string &name, const std::string &path) {
     this->display_images_.push_back({name, path});
   }
@@ -107,8 +111,28 @@ class CydSdHttpServer : public Component {
     std::string virtual_path;
   };
 
+  struct CachedImage {
+    std::string virtual_path;
+    uint32_t generation{0};
+    uint64_t last_used{0};
+    size_t data_size{0};
+    uint8_t *data{nullptr};
+    lv_image_dsc_t descriptor{};
+
+    ~CachedImage();
+    const void *source() const { return &this->descriptor; }
+  };
+
   bool register_lvgl_file_system_();
   bool is_mapped_image_path_(const std::string &virtual_path) const;
+  CachedImage *find_cached_image_(const std::string &virtual_path, uint32_t generation);
+  std::unique_ptr<CachedImage> decode_image_to_cache_(const std::string &virtual_path, uint32_t generation);
+  bool copy_decoded_area_(uint8_t *destination, uint32_t destination_stride, const lv_area_t &area,
+                          const lv_draw_buf_t *decoded);
+  bool ensure_cache_space_(size_t required);
+  void evict_cache_entry_(CachedImage *entry);
+  void evict_stale_cache_entries_(uint32_t generation);
+  void mark_mapped_image_changed_(const std::string &virtual_path);
   static bool lvgl_ready_cb_(lv_fs_drv_t *driver);
   static void *lvgl_open_cb_(lv_fs_drv_t *driver, const char *path, lv_fs_mode_t mode);
   static lv_fs_res_t lvgl_close_cb_(lv_fs_drv_t *driver, void *file);
@@ -148,6 +172,13 @@ class CydSdHttpServer : public Component {
   std::vector<DisplayImage> display_images_;
   size_t initial_image_index_{0};
   size_t selected_image_index_{0};
+  size_t decoded_image_cache_size_{0};
+  size_t decoded_image_cache_used_{0};
+  size_t lvgl_file_cache_size_{0};
+  uint64_t cache_use_counter_{0};
+  std::atomic<uint32_t> mapped_image_generation_{0};
+  std::vector<std::unique_ptr<CachedImage>> decoded_image_cache_;
+  CachedImage *active_cached_image_{nullptr};
   std::string active_lvgl_source_;
 #endif
 };

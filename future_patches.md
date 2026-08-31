@@ -23,13 +23,146 @@ same call chain. The example and README now require
 `loop_task_stack_size: 16384`; functional and endurance behavior remains open
 in the test matrix.
 
-## Priority 1: Remaining Media Work
+## Priority 1: Reduce SD Image Page-Switch Latency
+
+Before the cache implementation, the direct SD image path needed more than
+approximately 1,000 ms to render a full-screen image during a page switch on
+the physical FNK0104S. The initial performance target was to reduce the
+duration reported by the page-switch log to **300-500 ms or less**, without
+removing the existing HTTP server, browser downloads, uploads, or Home
+Assistant image selection.
+
+The RGB565 BIN result shows that JPEG decoding is not the only bottleneck. A
+480 x 320 RGB565 image contains 307,200 bytes, and LVGL 9.5 may read a
+file-backed BIN image in many small operations when `LV_BIN_DECODER_RAM_LOAD`
+is disabled. Increasing `loop_task_stack_size` prevents stack overflow but does
+not improve this throughput; the ESP32-S3 already runs at 240 MHz.
+
+### Implemented in 0.3.0: bounded PSRAM and file caches
+
+The first optimization stage is now implemented in the component and example:
+
+- a configurable LVGL per-file read cache, defaulting to 16 kB and capped at
+  64 kB, reduces repeated FATFS/SDMMC reads during the first decode;
+- a dynamically allocated decoded RGB565 cache uses PSRAM only, defaults to a
+  hard 1 MB budget, and evicts inactive entries in least-recently-used order;
+- a 480 x 320 image uses 307,200 bytes, so the default budget can retain three
+  full-screen frames without exceeding the configured limit;
+- the image currently assigned to the LVGL widget is never evicted underneath
+  LVGL, and systems without PSRAM retain the original low-RAM `S:/` streaming
+  fallback;
+- successful upload, overwrite, or deletion of a mapped image invalidates the
+  decoded generation so a later selection cannot return stale pixels;
+- browser uploads and fixed-`Content-Length` downloads are unchanged.
+
+### Hardware result reported for 0.3.0
+
+The PSRAM cache has now been exercised on the physical FNK0104S. The supplied
+boot log confirms that the component allocated and used a 307,200-byte RGB565
+frame inside the configured 1,000,000-byte PSRAM budget:
+
+```text
+Decoded image cached path=/Bild1.jpg bytes=307200 duration_ms=277
+Display image selected: Bild 1 (PSRAM cache MISS, 307200/1000000 bytes)
+Decoded image cache: 307200/1000000 bytes in PSRAM (1 entries)
+```
+
+Observed end-to-end behavior was approximately **600-700 ms** when selecting,
+decoding, and placing a previously uncached image into PSRAM, depending on the
+image and surrounding API work. The initial boot example logged 277 ms for the
+decoder/cache-copy portion alone. Once the frame was cached, leaving and
+returning to the image page took approximately **150-160 ms**, and subsequent
+page changes were often below ESPHome's current blocking-warning threshold.
+
+This verifies that PSRAM is actively used and that cached page redraws beat
+the original 300-500 ms target. The remaining display time is primarily the
+LVGL draw and SPI flush rather than SD reading or JPEG decoding. Exact timings
+can still vary with image format, other ESPHome activity, and the adaptive
+component warning threshold.
+
+Continue with the following measurements and optimizations in this order:
+
+1. Add timing and counters that separate file open/seek/read time, decoder and
+   LVGL draw time, and final display flush time. Use one clearly defined
+   page-switch duration for the acceptance target.
+2. Measure first-load misses, repeated Select hits, and leave/return page
+   switches with the implemented 16 kB file cache and 1 MB PSRAM LRU cache.
+   Also compare 0, 16 kB, 32 kB, and 64 kB file-cache settings.
+3. If the target is not reached, inspect whether the remaining duration is the
+   LVGL-to-display copy and SPI flush rather than SD access or decoding.
+4. Consider larger strip-based reads, a draw-ready cache format, or
+   asynchronous prefetching into a bounded PSRAM buffer if the generic LVGL
+   BIN decoder remains the limiting factor. LVGL object updates must still
+   occur in LVGL's own execution context, and SD access must remain
+   synchronized with HTTP operations.
+5. Evaluate display SPI and SDMMC clock changes only after the software timing
+   breakdown is available. Clock increases require physical-device stability
+   testing and must not be used to hide inefficient small reads.
+
+The low-RAM streaming mode must remain available. A faster PSRAM-backed mode
+may be optional and configurable because fast repeated page switches and
+strictly minimal RAM usage are competing goals. Performance and cache lifetime
+should still be measured across more formats and longer runs on the physical
+device; cache lifetime and fragmentation endurance remain open. Repository-side
+work remains limited to implementation, compilation, and host-side tests.
+
+## Priority 2 (Medium): Multiple Dynamic Image Widgets
+
+Extend `display_image` so one component instance can control an arbitrary
+number of LVGL image widgets by their YAML IDs. The initial implementation may
+share one compiled image name-to-SD-path allow-list across all configured
+widgets, avoiding duplicate mappings while preserving the existing path
+validation and cache behavior.
+
+Each widget must nevertheless receive its own ESPHome Select entity and its
+own Home Assistant dropdown. Selecting an option for one widget must update
+only that widget and must not change the selected image or published state of
+any other widget. Conceptually, a future configuration could look like:
+
+```yaml
+cyd_sd_http_server:
+  display_images:
+    images:
+      - name: Weather sunny
+        path: /icons/weather-sunny.jpg
+      - name: Weather rain
+        path: /icons/weather-rain.jpg
+
+    widgets:
+      - image_widget: weather_icon
+        initial_image: Weather sunny
+        select:
+          id: weather_icon_select
+          name: Weather icon
+
+      - image_widget: secondary_image
+        initial_image: Weather rain
+        select:
+          id: secondary_image_select
+          name: Secondary image
+```
+
+The exact YAML schema may change during implementation; the required behavior
+is one shared mapping plus one independent runtime controller and Home
+Assistant Select entity per widget. Decoded PSRAM entries should be shared by
+SD path where possible, so two widgets displaying the same image do not require
+two identical full-frame buffers. Cache eviction must never free an entry still
+referenced by any widget.
+
+This feature should make it possible to fill icons, photographs, status images,
+and other LVGL image elements dynamically at runtime through any number of Home
+Assistant dropdowns. The first version can keep the mapping static and compiled
+from YAML; directory scanning, arbitrary user paths, and automatic widget
+creation remain separate future enhancements.
+
+## Priority 3: Remaining Media Work
 
 The goal is still not zero RAM usage. LVGL needs its display draw buffer, widget
 state, decoder work memory, and small file buffers. The implemented image path
-avoids keeping the complete source file or a permanently decoded full-screen
-image in RAM. For comparison, a 320 x 480 RGB565 `online_image` requires a
-307,200-byte runtime image buffer.
+does not keep the compressed source file in RAM. Its faster default mode does
+retain recently decoded RGB565 frames in PSRAM, but only within the configured
+hard budget; `max_size: 0` preserves the low-RAM streaming mode. For comparison,
+one 320 x 480 RGB565 frame requires 307,200 bytes.
 
 ### Completed Phase 1: Shared SD Storage Service
 
@@ -95,7 +228,7 @@ The controller must:
 - confirm that the file exists before replacing the current image;
 - retain the source string for as long as LVGL may reference it;
 - perform the widget update in the correct LVGL execution context;
-- invalidate or release the previous image cache entry;
+- keep the previous entry only while it fits the bounded LRU policy;
 - leave the previous image visible and report an error if loading fails.
 
 ### Completed Initial Phase 5: Home Assistant Selection
@@ -116,11 +249,12 @@ files, unsupported extensions, excessive path lengths, and nonexistent files.
 
 ### Phase 6: Current-Page Memory Policy
 
-Configure and manage LVGL so that only the currently needed media remains
-cached:
+Configure and manage LVGL with a strict, user-selected cache budget:
 
-- keep at most the current image in the image cache;
-- release the previous cache entry when the source changes;
+- retain recently used decoded images only up to the configured hard limit;
+- evict inactive entries in least-recently-used order before exceeding it;
+- never free the descriptor currently assigned to the image widget;
+- invalidate entries after mapped files are replaced or deleted;
 - close SD file handles after drawing or decoding completes;
 - release page-specific media when leaving a page;
 - consider lazy creation and destruction for pages with many widgets or assets.
@@ -160,11 +294,12 @@ The first milestone now contains:
 1. one shared and synchronized SD storage service;
 2. a read-only LVGL `S:` drive;
 3. JPEG and LVGL BIN image sources;
-4. one active image and a bounded image-cache policy;
+4. one active image plus an optional, bounded PSRAM LRU cache;
 5. a static Home Assistant dropdown mapped to approved paths;
 6. unchanged browser upload and download support.
 
 PNG, automatic directory-backed dropdown options, an optional touchscreen
 dropdown, arbitrary path strings, page lifecycle management, and audio
-streaming remain separate milestones after the first version is stable and its
-memory use has been measured on hardware.
+streaming remain separate milestones after the first version is stable. The
+initial PSRAM allocation and page-switch timing have now been measured on
+hardware; long-duration cache behavior remains open.

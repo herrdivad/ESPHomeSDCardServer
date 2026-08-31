@@ -16,6 +16,8 @@
 #include "web_ui.h"
 
 #ifdef USE_CYD_SD_LVGL
+#include "esp_heap_caps.h"
+#include "draw/lv_image_decoder_private.h"
 #include "misc/cache/instance/lv_image_cache.h"
 #endif
 
@@ -23,7 +25,7 @@ namespace esphome {
 namespace cyd_sd_http_server {
 
 static const char *const TAG = "cyd_sd_http";
-static const char *const SERVER_VERSION = "0.2.0";
+static const char *const SERVER_VERSION = "0.3.0";
 static constexpr size_t STREAM_BUFFER_SIZE = 8192;
 static constexpr size_t MAX_QUERY_LENGTH = 1024;
 static constexpr size_t MAX_LIST_LIMIT = 100;
@@ -165,6 +167,12 @@ void CydSdHttpServer::dump_config() {
   ESP_LOGCONFIG(TAG, "  Authentication: enabled");
   ESP_LOGCONFIG(TAG, "  Mounted: %s", YESNO(this->storage_.is_mounted()));
 #ifdef USE_CYD_SD_LVGL
+  ESP_LOGCONFIG(TAG, "  LVGL file read cache: %u bytes per open file",
+                static_cast<unsigned>(this->lvgl_file_cache_size_));
+  ESP_LOGCONFIG(TAG, "  Decoded image cache: %u/%u bytes in PSRAM (%u entries)",
+                static_cast<unsigned>(this->decoded_image_cache_used_),
+                static_cast<unsigned>(this->decoded_image_cache_size_),
+                static_cast<unsigned>(this->decoded_image_cache_.size()));
   ESP_LOGCONFIG(TAG, "  LVGL SD drive: %c:", this->lvgl_drive_letter_);
   ESP_LOGCONFIG(TAG, "  Display image mappings: %u", static_cast<unsigned>(this->display_images_.size()));
   for (const auto &image : this->display_images_)
@@ -182,6 +190,11 @@ bool CydSdHttpServer::teardown() {
 }
 
 #ifdef USE_CYD_SD_LVGL
+CydSdHttpServer::CachedImage::~CachedImage() {
+  if (this->data != nullptr)
+    heap_caps_free(this->data);
+}
+
 void CydSdImageSelect::control(size_t index) {
   if (!this->parent_->select_image(index))
     ESP_LOGW(TAG, "Display image selection index %u failed", static_cast<unsigned>(index));
@@ -197,7 +210,7 @@ bool CydSdHttpServer::register_lvgl_file_system_() {
 
   lv_fs_drv_init(&this->lvgl_fs_driver_);
   this->lvgl_fs_driver_.letter = this->lvgl_drive_letter_;
-  this->lvgl_fs_driver_.cache_size = 0;
+  this->lvgl_fs_driver_.cache_size = this->lvgl_file_cache_size_;
   this->lvgl_fs_driver_.user_data = this;
   this->lvgl_fs_driver_.ready_cb = lvgl_ready_cb_;
   this->lvgl_fs_driver_.open_cb = lvgl_open_cb_;
@@ -207,13 +220,229 @@ bool CydSdHttpServer::register_lvgl_file_system_() {
   this->lvgl_fs_driver_.tell_cb = lvgl_tell_cb_;
   lv_fs_drv_register(&this->lvgl_fs_driver_);
   this->lvgl_fs_registered_ = true;
-  ESP_LOGI(TAG, "Registered read-only LVGL SD drive %c:", this->lvgl_drive_letter_);
+  if (this->decoded_image_cache_size_ > 0 &&
+      heap_caps_get_total_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == 0) {
+    ESP_LOGW(TAG, "Decoded image cache disabled because PSRAM is unavailable");
+    this->decoded_image_cache_size_ = 0;
+  }
+  ESP_LOGI(TAG, "Registered read-only LVGL SD drive %c: file_cache=%u decoded_cache=%u", this->lvgl_drive_letter_,
+           static_cast<unsigned>(this->lvgl_file_cache_size_),
+           static_cast<unsigned>(this->decoded_image_cache_size_));
   return true;
 }
 
 bool CydSdHttpServer::is_mapped_image_path_(const std::string &virtual_path) const {
   return std::any_of(this->display_images_.begin(), this->display_images_.end(),
                      [&virtual_path](const DisplayImage &image) { return image.virtual_path == virtual_path; });
+}
+
+CydSdHttpServer::CachedImage *CydSdHttpServer::find_cached_image_(const std::string &virtual_path,
+                                                                  uint32_t generation) {
+  for (const auto &entry : this->decoded_image_cache_) {
+    if (entry->virtual_path == virtual_path && entry->generation == generation)
+      return entry.get();
+  }
+  return nullptr;
+}
+
+bool CydSdHttpServer::ensure_cache_space_(size_t required) {
+  if (required == 0 || required > this->decoded_image_cache_size_)
+    return false;
+  while (this->decoded_image_cache_used_ > this->decoded_image_cache_size_ - required) {
+    CachedImage *oldest = nullptr;
+    for (const auto &entry : this->decoded_image_cache_) {
+      if (entry.get() == this->active_cached_image_)
+        continue;
+      if (oldest == nullptr || entry->last_used < oldest->last_used)
+        oldest = entry.get();
+    }
+    if (oldest == nullptr)
+      return false;
+    this->evict_cache_entry_(oldest);
+  }
+  return true;
+}
+
+void CydSdHttpServer::evict_cache_entry_(CachedImage *entry) {
+  if (entry == nullptr || entry == this->active_cached_image_)
+    return;
+  const auto found = std::find_if(this->decoded_image_cache_.begin(), this->decoded_image_cache_.end(),
+                                  [entry](const std::unique_ptr<CachedImage> &candidate) {
+                                    return candidate.get() == entry;
+                                  });
+  if (found == this->decoded_image_cache_.end())
+    return;
+  lv_image_cache_drop(entry->source());
+  if (entry->data_size <= this->decoded_image_cache_used_)
+    this->decoded_image_cache_used_ -= entry->data_size;
+  else
+    this->decoded_image_cache_used_ = 0;
+  ESP_LOGD(TAG, "Evicting decoded image cache path=%s bytes=%u", entry->virtual_path.c_str(),
+           static_cast<unsigned>(entry->data_size));
+  this->decoded_image_cache_.erase(found);
+}
+
+void CydSdHttpServer::evict_stale_cache_entries_(uint32_t generation) {
+  while (true) {
+    CachedImage *stale = nullptr;
+    for (const auto &entry : this->decoded_image_cache_) {
+      if (entry.get() != this->active_cached_image_ && entry->generation != generation) {
+        stale = entry.get();
+        break;
+      }
+    }
+    if (stale == nullptr)
+      return;
+    this->evict_cache_entry_(stale);
+  }
+}
+
+void CydSdHttpServer::mark_mapped_image_changed_(const std::string &virtual_path) {
+  if (!this->is_mapped_image_path_(virtual_path))
+    return;
+  this->mapped_image_generation_.fetch_add(1, std::memory_order_relaxed);
+  ESP_LOGD(TAG, "Mapped image cache invalidated by SD change path=%s", virtual_path.c_str());
+}
+
+bool CydSdHttpServer::copy_decoded_area_(uint8_t *destination, uint32_t destination_stride,
+                                         const lv_area_t &area, const lv_draw_buf_t *decoded) {
+  if (destination == nullptr || decoded == nullptr || decoded->data == nullptr)
+    return false;
+  const int32_t width = lv_area_get_width(&area);
+  const int32_t height = lv_area_get_height(&area);
+  if (width <= 0 || height <= 0 || decoded->header.w < width || decoded->header.h < height)
+    return false;
+
+  const uint8_t *source = decoded->data;
+  const uint32_t source_stride = decoded->header.stride;
+  for (int32_t y = 0; y < height; y++) {
+    const uint8_t *source_row = source + static_cast<size_t>(y) * source_stride;
+    uint8_t *destination_row = destination + static_cast<size_t>(area.y1 + y) * destination_stride +
+                               static_cast<size_t>(area.x1) * 2;
+    if (decoded->header.cf == LV_COLOR_FORMAT_RGB565) {
+      memcpy(destination_row, source_row, static_cast<size_t>(width) * 2);
+      continue;
+    }
+    if (decoded->header.cf == LV_COLOR_FORMAT_RGB565_SWAPPED) {
+      for (int32_t x = 0; x < width; x++) {
+        destination_row[x * 2] = source_row[x * 2 + 1];
+        destination_row[x * 2 + 1] = source_row[x * 2];
+      }
+      continue;
+    }
+    if (decoded->header.cf == LV_COLOR_FORMAT_RGB888) {
+      for (int32_t x = 0; x < width; x++) {
+        const uint8_t blue = source_row[x * 3];
+        const uint8_t green = source_row[x * 3 + 1];
+        const uint8_t red = source_row[x * 3 + 2];
+        const uint16_t rgb565 = static_cast<uint16_t>(((red & 0xF8) << 8) | ((green & 0xFC) << 3) | (blue >> 3));
+        destination_row[x * 2] = static_cast<uint8_t>(rgb565 & 0xFF);
+        destination_row[x * 2 + 1] = static_cast<uint8_t>(rgb565 >> 8);
+      }
+      continue;
+    }
+    ESP_LOGW(TAG, "Decoded cache does not support LVGL color format %d", static_cast<int>(decoded->header.cf));
+    return false;
+  }
+  return true;
+}
+
+std::unique_ptr<CydSdHttpServer::CachedImage> CydSdHttpServer::decode_image_to_cache_(
+    const std::string &virtual_path, uint32_t generation) {
+  if (this->decoded_image_cache_size_ == 0)
+    return nullptr;
+
+  const std::string source = std::string(1, this->lvgl_drive_letter_) + ":" + virtual_path;
+  lv_image_header_t source_header{};
+  if (lv_image_decoder_get_info(source.c_str(), &source_header) != LV_RESULT_OK || source_header.w == 0 ||
+      source_header.h == 0) {
+    ESP_LOGW(TAG, "Cannot read image header for PSRAM cache path=%s", virtual_path.c_str());
+    return nullptr;
+  }
+
+  const uint64_t output_size_64 = static_cast<uint64_t>(source_header.w) * source_header.h * 2;
+  if (output_size_64 == 0 || output_size_64 > this->decoded_image_cache_size_) {
+    ESP_LOGW(TAG, "Image does not fit decoded cache path=%s size=%llu limit=%u", virtual_path.c_str(),
+             static_cast<unsigned long long>(output_size_64),
+             static_cast<unsigned>(this->decoded_image_cache_size_));
+    return nullptr;
+  }
+  const size_t output_size = static_cast<size_t>(output_size_64);
+  if (!this->ensure_cache_space_(output_size)) {
+    ESP_LOGW(TAG, "Decoded cache cannot evict enough inactive data path=%s bytes=%u", virtual_path.c_str(),
+             static_cast<unsigned>(output_size));
+    return nullptr;
+  }
+
+  auto entry = std::unique_ptr<CachedImage>(new (std::nothrow) CachedImage());
+  if (entry == nullptr)
+    return nullptr;
+  entry->data = static_cast<uint8_t *>(heap_caps_malloc(output_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (entry->data == nullptr) {
+    ESP_LOGW(TAG, "PSRAM allocation failed for decoded image path=%s bytes=%u largest=%u", virtual_path.c_str(),
+             static_cast<unsigned>(output_size),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+    return nullptr;
+  }
+
+  const uint32_t started = millis();
+  lv_image_decoder_dsc_t decoder{};
+  if (lv_image_decoder_open(&decoder, source.c_str(), nullptr) != LV_RESULT_OK || decoder.header.w != source_header.w ||
+      decoder.header.h != source_header.h) {
+    ESP_LOGW(TAG, "Cannot open image decoder for PSRAM cache path=%s", virtual_path.c_str());
+    if (decoder.decoder != nullptr)
+      lv_image_decoder_close(&decoder);
+    return nullptr;
+  }
+
+  bool decoded_ok = true;
+  uint64_t copied_pixels = 0;
+  const uint32_t destination_stride = static_cast<uint32_t>(source_header.w) * 2;
+  if (decoder.decoded != nullptr) {
+    const lv_area_t full_area{0, 0, static_cast<int32_t>(source_header.w) - 1,
+                              static_cast<int32_t>(source_header.h) - 1};
+    decoded_ok = this->copy_decoded_area_(entry->data, destination_stride, full_area, decoder.decoded);
+    copied_pixels = decoded_ok ? static_cast<uint64_t>(source_header.w) * source_header.h : 0;
+  } else {
+    const lv_area_t full_area{0, 0, static_cast<int32_t>(source_header.w) - 1,
+                              static_cast<int32_t>(source_header.h) - 1};
+    lv_area_t decoded_area{LV_COORD_MIN, LV_COORD_MIN, LV_COORD_MIN, LV_COORD_MIN};
+    while (lv_image_decoder_get_area(&decoder, &full_area, &decoded_area) == LV_RESULT_OK) {
+      if (decoded_area.x1 < 0 || decoded_area.y1 < 0 || decoded_area.x2 >= source_header.w ||
+          decoded_area.y2 >= source_header.h ||
+          !this->copy_decoded_area_(entry->data, destination_stride, decoded_area, decoder.decoded)) {
+        decoded_ok = false;
+        break;
+      }
+      copied_pixels += static_cast<uint64_t>(lv_area_get_width(&decoded_area)) * lv_area_get_height(&decoded_area);
+    }
+  }
+  lv_image_decoder_close(&decoder);
+  if (!decoded_ok || copied_pixels != static_cast<uint64_t>(source_header.w) * source_header.h) {
+    ESP_LOGW(TAG, "Incomplete decoded cache image path=%s pixels=%llu expected=%llu", virtual_path.c_str(),
+             static_cast<unsigned long long>(copied_pixels),
+             static_cast<unsigned long long>(static_cast<uint64_t>(source_header.w) * source_header.h));
+    return nullptr;
+  }
+
+  entry->virtual_path = virtual_path;
+  entry->generation = generation;
+  entry->last_used = ++this->cache_use_counter_;
+  entry->data_size = output_size;
+  entry->descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
+  entry->descriptor.header.cf = LV_COLOR_FORMAT_RGB565;
+  entry->descriptor.header.flags = 0;
+  entry->descriptor.header.w = source_header.w;
+  entry->descriptor.header.h = source_header.h;
+  entry->descriptor.header.stride = destination_stride;
+  entry->descriptor.header.reserved_2 = 0;
+  entry->descriptor.data_size = output_size;
+  entry->descriptor.data = entry->data;
+  entry->descriptor.reserved = nullptr;
+  entry->descriptor.reserved_2 = nullptr;
+  ESP_LOGI(TAG, "Decoded image cached path=%s bytes=%u duration_ms=%" PRIu32, virtual_path.c_str(),
+           static_cast<unsigned>(output_size), millis() - started);
+  return entry;
 }
 
 bool CydSdHttpServer::select_image(size_t index) {
@@ -235,15 +464,43 @@ bool CydSdHttpServer::select_image(size_t index) {
     return false;
   }
 
+  const uint32_t generation = this->mapped_image_generation_.load(std::memory_order_relaxed);
+  CachedImage *cached = this->find_cached_image_(image.virtual_path, generation);
+  const bool cache_hit = cached != nullptr;
+  if (cached == nullptr && this->decoded_image_cache_size_ > 0) {
+    auto loaded = this->decode_image_to_cache_(image.virtual_path, generation);
+    if (loaded != nullptr) {
+      cached = loaded.get();
+      this->decoded_image_cache_used_ += loaded->data_size;
+      this->decoded_image_cache_.push_back(std::move(loaded));
+    }
+  }
+
   if (!this->active_lvgl_source_.empty())
     lv_image_cache_drop(this->active_lvgl_source_.c_str());
-  this->active_lvgl_source_ = std::string(1, this->lvgl_drive_letter_) + ":" + image.virtual_path;
-  ::lv_image_set_src(this->image_widget_, this->active_lvgl_source_.c_str());
+  if (cached != nullptr) {
+    cached->last_used = ++this->cache_use_counter_;
+    ::lv_image_set_src(this->image_widget_, cached->source());
+    this->active_lvgl_source_.clear();
+    this->active_cached_image_ = cached;
+  } else {
+    this->active_lvgl_source_ = std::string(1, this->lvgl_drive_letter_) + ":" + image.virtual_path;
+    ::lv_image_set_src(this->image_widget_, this->active_lvgl_source_.c_str());
+    this->active_cached_image_ = nullptr;
+  }
   lv_obj_invalidate(this->image_widget_);
+  this->evict_stale_cache_entries_(generation);
   this->selected_image_index_ = index;
   if (this->image_select_ != nullptr)
     this->image_select_->publish_state(index);
-  ESP_LOGI(TAG, "Display image selected: %s (%s)", image.name.c_str(), this->active_lvgl_source_.c_str());
+  if (cached != nullptr) {
+    ESP_LOGI(TAG, "Display image selected: %s (PSRAM cache %s, %u/%u bytes)", image.name.c_str(),
+             cache_hit ? "HIT" : "MISS", static_cast<unsigned>(this->decoded_image_cache_used_),
+             static_cast<unsigned>(this->decoded_image_cache_size_));
+  } else {
+    ESP_LOGI(TAG, "Display image selected: %s (%s, streaming fallback)", image.name.c_str(),
+             this->active_lvgl_source_.c_str());
+  }
   return true;
 }
 
@@ -704,6 +961,9 @@ void CydSdHttpServer::process_upload_(AsyncUploadContext *async_context) {
     this->send_error_(request, "upload", path, result, parsed_length);
     return;
   }
+#ifdef USE_CYD_SD_LVGL
+  this->mark_mapped_image_changed_(path);
+#endif
   ESP_LOGI(TAG, "[req=%" PRIu32 "] upload complete path=%s bytes=%llu duration_ms=%" PRIu32, request_id,
            path.c_str(), static_cast<unsigned long long>(parsed_length), millis() - context.started_ms);
   const std::string json = "{\"ok\":true,\"operation\":\"upload\",\"path\":\"" + json_escape(path) +
@@ -731,6 +991,9 @@ esp_err_t CydSdHttpServer::handle_delete_file_(httpd_req_t *request) {
   const StorageResult result = this->storage_.delete_file(path);
   if (!result.ok())
     return this->send_error_(request, "delete", path, result);
+#ifdef USE_CYD_SD_LVGL
+  this->mark_mapped_image_changed_(path);
+#endif
   ESP_LOGI(TAG, "[req=%" PRIu32 "] delete complete path=%s", request_id, path.c_str());
   const std::string json = "{\"ok\":true,\"operation\":\"delete\",\"path\":\"" + json_escape(path) +
                            "\",\"bytes\":" + std::to_string(result.bytes_processed) + "}";

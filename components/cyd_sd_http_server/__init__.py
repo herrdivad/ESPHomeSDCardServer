@@ -14,6 +14,7 @@ CODEOWNERS = []
 
 CONF_API_KEY = "api_key"
 CONF_BUS_WIDTH = "bus_width"
+CONF_CACHE = "cache"
 CONF_CLK_PIN = "clk_pin"
 CONF_CMD_PIN = "cmd_pin"
 CONF_CONTROL_PORT = "control_port"
@@ -28,11 +29,18 @@ CONF_IMAGE_WIDGET = "image_widget"
 CONF_IMAGES = "images"
 CONF_INITIAL_IMAGE = "initial_image"
 CONF_INTERNAL_PULLUPS = "internal_pullups"
+CONF_FILE_BUFFER_SIZE = "file_buffer_size"
+CONF_MEMORY = "memory"
+CONF_MAX_SIZE = "max_size"
 CONF_MAX_UPLOAD_SIZE = "max_upload_size"
 CONF_MOUNT_POINT = "mount_point"
 CONF_PORT = "port"
 CONF_SELECT = "select"
+CONF_STRATEGY = "strategy"
 CONF_URL_PREFIX = "url_prefix"
+
+MAX_DECODED_CACHE_SIZE = 1024 * 1024
+MAX_FILE_BUFFER_SIZE = 64 * 1024
 
 cyd_ns = cg.esphome_ns.namespace("cyd_sd_http_server")
 CydSdHttpServer = cyd_ns.class_("CydSdHttpServer", cg.Component)
@@ -85,6 +93,27 @@ def _image_path(value):
     return value
 
 
+IMAGE_CACHE_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_MAX_SIZE, default="1MB"): cv.All(
+            cv.validate_bytes,
+            cv.int_range(min=0, max=MAX_DECODED_CACHE_SIZE),
+        ),
+        cv.Optional(CONF_FILE_BUFFER_SIZE, default="16kB"): cv.All(
+            cv.validate_bytes,
+            cv.int_range(min=0, max=MAX_FILE_BUFFER_SIZE),
+        ),
+        # The first implementation deliberately has one safe policy. Keeping
+        # these values explicit in YAML documents that decoded frames never
+        # consume internal RAM and that eviction order is deterministic.
+        cv.Optional(CONF_MEMORY, default="psram"): cv.one_of(
+            "psram", lower=True
+        ),
+        cv.Optional(CONF_STRATEGY, default="lru"): cv.one_of("lru", lower=True),
+    }
+)
+
+
 DISPLAY_IMAGE_SCHEMA = cv.Schema(
     {
         cv.Required(CONF_IMAGE_WIDGET): cv.All(
@@ -103,6 +132,7 @@ DISPLAY_IMAGE_SCHEMA = cv.Schema(
             cv.Length(min=1),
         ),
         cv.Optional(CONF_INITIAL_IMAGE): cv.string_strict,
+        cv.Optional(CONF_CACHE, default={}): IMAGE_CACHE_SCHEMA,
         cv.Required(CONF_SELECT): select.select_schema(CydSdImageSelect),
     }
 )
@@ -221,6 +251,9 @@ async def to_code(config):
         image_widget = await cg.get_variable(display[CONF_IMAGE_WIDGET])
         cg.add(var.set_image_widget(image_widget))
         cg.add(var.set_lvgl_drive_letter(display[CONF_DRIVE_LETTER]))
+        cache = display[CONF_CACHE]
+        cg.add(var.set_decoded_image_cache_size(cache[CONF_MAX_SIZE]))
+        cg.add(var.set_lvgl_file_cache_size(cache[CONF_FILE_BUFFER_SIZE]))
         for image in display[CONF_IMAGES]:
             cg.add(var.add_display_image(image[CONF_NAME], image[CONF_PATH]))
 

@@ -12,30 +12,42 @@ LVGL image widget whose YAML ID is `sd_display_image`. That widget starts with
 at compile time.
 
 During server setup, the C++ code looks up the configured initial mapping,
-`Bild 1 → /Bild1.jpg`, and changes that widget's source to `S:/Bild1.jpg`.
-It then tells LVGL that the widget needs to be redrawn. This is not a permanent
-server loop that repeatedly replaces the source: it happens once during setup.
+`Bild 1 → /Bild1.jpg`. With the default cache enabled, it reads and decodes that
+file once into an RGB565 buffer in PSRAM and changes the widget source to the
+in-memory LVGL image descriptor. If PSRAM is unavailable, the image is too
+large, or decoding fails, it changes the source to `S:/Bild1.jpg` instead. It
+then tells LVGL that the widget needs to be redrawn. This is not a permanent
+server loop that repeatedly replaces the source: it happens during setup and
+whenever the Select value changes.
 
 When a user chooses `Bild 2` in Home Assistant, the ESPHome Select callback
 uses the compiled mapping, `Bild 2 → /images/Bild2.jpg`. After confirming that
-the file is available, the same C++ code changes the widget source to
-`S:/images/Bild2.jpg` and marks it for redraw. On LVGL's next normal refresh
-cycle, LVGL opens that `S:` path and reads the image directly from the SD card.
-Home Assistant sends only the option name/index; it never transfers the image
-file itself.
+the file is available, the component first looks for a valid decoded PSRAM
+entry. A cache hit is handed to the widget immediately. A miss is decoded from
+the `S:` drive and added to the LRU cache; streaming `S:/images/Bild2.jpg`
+remains the fallback. Home Assistant sends only the option name/index; it never
+transfers the image file itself.
 
-## The three different image locations
+Changing an LVGL page does not remap the source in every loop. Once the image
+widget points at a cached descriptor, returning to that page reads the finished
+RGB565 pixels from PSRAM. SD access and decoding are required again only after
+an eviction, a mapped-file upload/delete, or a streaming fallback.
+
+## The image locations
 
 ```mermaid
 flowchart LR
     P["assets/sd-image-placeholder.svg\n1 × 1 black compile-time placeholder"]
     F["Firmware\ncontains the tiny placeholder only"]
     SD["SD card\n/Bild1.jpg\n/images/Bild2.jpg\nactual media files"]
+    C["Optional PSRAM LRU cache\ndecoded RGB565 frames"]
     D["Display\nshows the selected SD image"]
 
     P -->|ESPHome compile| F
     F -->|first LVGL widget source| D
-    SD -->|after LVGL selects S:/...| D
+    SD -->|first decode on cache miss| C
+    C -->|fast redraw on cache hit| D
+    SD -.->|S:/ streaming fallback| D
 ```
 
 The placeholder is **not** an example photo. It is only a one-pixel image that
@@ -69,6 +81,11 @@ cyd_sd_http_server:
     image_widget: sd_display_image
     drive_letter: S
     initial_image: Bild 1
+    cache:
+      max_size: 1MB
+      file_buffer_size: 16kB
+      memory: psram
+      strategy: lru
     images:
       - name: Bild 1
         path: /Bild1.jpg
@@ -119,6 +136,7 @@ sequenceDiagram
     participant Server as CYD SD server
     participant Store as SdStorage
     participant Card as SD card
+    participant Cache as PSRAM LRU cache
 
     LVGL->>LVGL: Create image widget with compiled 1 × 1 placeholder
     Server->>Store: Mount /sdcard once
@@ -126,12 +144,11 @@ sequenceDiagram
     Server->>LVGL: Register read-only S: file-system driver
     Server->>Store: Probe mapped initial file /Bild1.jpg
     Store->>Card: Open and close the file to verify it exists
-    Server->>LVGL: Set widget source to S:/Bild1.jpg
+    Server->>Card: Read and decode S:/Bild1.jpg on cache miss
+    Server->>Cache: Store finished RGB565 frame
+    Server->>LVGL: Set widget source to cached descriptor
     LVGL->>LVGL: Invalidate widget for redraw
-    LVGL->>Server: Open/read/seek/tell/close S:/Bild1.jpg
-    Server->>Store: Validate mapped path and read through shared storage
-    Store->>Card: Read JPEG blocks
-    LVGL->>LVGL: Decode JPEG incrementally and draw it
+    LVGL->>Cache: Draw finished RGB565 pixels
 ```
 
 If mounting fails or the selected file is absent, the component leaves the
@@ -139,9 +156,10 @@ placeholder (or, after a later failed selection, the previous working image) in
 place and logs an error. It does not use the local HTTP server or
 `online_image` for this display path.
 
-The JPEG source is read in small blocks as LVGL needs it. LVGL still needs its
-display buffer and decoder work memory; it does not retain a permanent
-full-screen `online_image` RGB565 buffer.
+The first load still uses LVGL's incremental decoder. The 16 kB LVGL file cache
+combines small decoder reads before they reach FATFS/SDMMC. After a successful
+decode, the configured LRU cache retains up to 1 MB of finished RGB565 frames
+in PSRAM. Memory is allocated on demand rather than reserved at boot.
 
 ## How the Home Assistant dropdown works
 
@@ -154,6 +172,7 @@ sequenceDiagram
     participant Server as CydSdHttpServer
     participant LVGL as LVGL widget
     participant Card as SD card
+    participant Cache as PSRAM LRU cache
 
     Note over API,Select: At boot ESPHome advertises options: Bild 1, Bild 2
     HA->>API: User selects “Bild 2”
@@ -161,10 +180,16 @@ sequenceDiagram
     Select->>Server: select_image(1)
     Server->>Card: Probe allow-listed /images/Bild2.jpg
     alt File exists and is available
-        Server->>LVGL: Set source to S:/images/Bild2.jpg
+        Server->>Cache: Find valid decoded image
+        alt Cache hit
+            Cache-->>Server: Return RGB565 descriptor
+        else Cache miss
+            Server->>Card: Read/decode S:/images/Bild2.jpg
+            Server->>Cache: Add frame and evict LRU entries if required
+        end
+        Server->>LVGL: Set cached descriptor or S:/ fallback source
         Server->>LVGL: Invalidate widget
         Server->>Select: Publish state “Bild 2”
-        LVGL->>Card: Read and decode the new image directly
         API-->>HA: Updated selected option
     else File missing, invalid, or busy
         Server-->>Select: Reject selection and log the reason
@@ -180,6 +205,27 @@ files, or an unapproved media file.
 The dropdown exists in Home Assistant through the ESPHome Select entity. It is
 not currently an on-screen LVGL dropdown; adding a touchscreen dropdown is a
 future enhancement.
+
+## Cache behavior
+
+The default `max_size: 1MB` is a hard decoded-pixel budget, not a boot-time
+reservation. Each opaque RGB565 pixel needs two bytes. Consequently, either
+orientation of a 480 x 320 frame needs 307,200 bytes and three such frames use
+921,600 bytes. Loading a fourth frame evicts the least recently used entry that
+is not currently assigned to the widget.
+
+Only PSRAM is accepted for decoded entries. Systems without PSRAM retain the
+same mapping and Home Assistant Select but stream through `S:`. A cache entry
+larger than the configured budget also streams. `file_buffer_size` is separate:
+it is a short-lived per-open-file read cache that accelerates the initial
+decode without retaining another finished frame.
+
+The cache log distinguishes `HIT`, `MISS`, and `streaming fallback`. A Select
+change still performs a small open/close probe so a missing file is rejected,
+but a hit does not read or decode the image body. Uploading, overwriting, or
+deleting a mapped file through this component advances the media generation.
+Old inactive entries are then evicted and cannot be returned as hits. This
+cache does not change HTTP response bodies or browser downloads.
 
 ## Browser UI and direct display use the same storage service
 
@@ -206,10 +252,12 @@ file that is actively being read from being replaced or deleted unsafely.
 2. Keep `CONFIG_FATFS_LFN_STACK: "y"` for normal FAT32 long file names.
 3. Put the placeholder SVG next to the YAML in `assets/`; it is only used at
    compile time.
-4. Upload baseline `.jpg`/`.jpeg` images or LVGL 9.5-compatible `.bin` assets
+4. Keep the default 1 MB/16 kB cache settings when PSRAM is available, or set
+   `max_size: 0` when strict streaming is preferred.
+5. Upload baseline `.jpg`/`.jpeg` images or LVGL 9.5-compatible `.bin` assets
    to the exact SD paths listed under `images:`.
-5. Flash the rebuilt firmware once after changing the YAML mapping.
-6. Use the `Display image` Select entity in Home Assistant to change the image.
+6. Flash the rebuilt firmware once after changing the YAML mapping.
+7. Use the `Display image` Select entity in Home Assistant to change the image.
 
 PNG and progressive JPEG are not supported by this direct path. Browser file
 transfer remains available regardless of which image is selected.

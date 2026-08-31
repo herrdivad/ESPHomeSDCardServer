@@ -70,6 +70,14 @@ cyd_sd_http_server:
     image_widget: sd_display_image
     drive_letter: S
     initial_image: Bild 1
+    # Decoded RGB565 frames are allocated only in PSRAM and retained with LRU
+    # eviction. 1 MB holds three 480x320 frames (307,200 bytes each). The
+    # smaller per-file buffer reduces repeated FATFS seeks on the first load.
+    cache:
+      max_size: 1MB
+      file_buffer_size: 16kB
+      memory: psram
+      strategy: lru
     images:
       - name: Bild 1
         path: /Bild1.jpg
