@@ -254,6 +254,23 @@ SD_API_KEY='…' python scripts/upload_file.py \
 `--verify` downloads to an OS temporary file, compares SHA-256 and removes only
 that local temporary file. It does not delete the remote upload.
 
+## Host-side LVGL BIN converter
+
+The independent [image conversion tool](add_tools/README.md) converts PNG and
+JPEG files into the uncompressed LVGL 9.5 RGB565 BIN format accepted by the
+direct `S:` image path. It supports proportional resizing when only width or
+height is supplied, exact resizing when both are supplied, clockwise rotation,
+and configurable compositing for transparent PNGs.
+
+```bash
+.venv/bin/python -m pip install -r add_tools/requirements.txt
+.venv/bin/python add_tools/image_to_lvgl_bin.py input.png \
+  --rotate 90 --width 240 --height 160 --output logo.bin
+```
+
+Conversion happens entirely on the host computer and does not connect to or
+modify the microcontroller.
+
 ## Local validation
 
 No hardware is touched by these commands:
