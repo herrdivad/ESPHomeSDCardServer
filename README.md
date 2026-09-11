@@ -18,6 +18,12 @@
 
 # CYD SD HTTP Server for ESPHome
 
+- **Manage your SD card in the browser** — dedicated web server for uploads, downloads, folders, and deletion, alongside ESPHome and OTA.
+- **Bring SD images to your dashboard** — static LVGL widgets or dynamic images with independent Home Assistant dropdowns.
+- **Cache on demand, stream when needed** — dynamically allocated PSRAM image cache with direct SD-streaming fallback.
+- **One image library, shared memory** — one YAML allow-list for all widgets; the same cached image uses one pixel buffer across multiple widgets.
+- **Prepare and transfer with helper tools** — host-side LVGL BIN conversion and streaming Python uploads with optional SHA-256 verification.
+
 Native, streaming SD-card file transfer for the Freenove FNK0104S. The ESPHome
 web server remains on port 80 and this component runs an independent ESP-IDF
 HTTP server on port 8080. Firmware OTA remains the normal ESPHome OTA service;
@@ -189,6 +195,9 @@ IP address), enter the API key, and upload your files. The full display example
 expects the JPEG and logo files listed under `display_images.images`; create
 their folders and upload them, or adapt the mapping and widgets to your assets.
 Restart after initially provisioning the assets to load all initial images.
+The SD image files do not need to exist at compile time; see
+[Image provisioning and rebuild requirements](#image-provisioning-and-rebuild-requirements)
+for the distinction between the compiled allow-list and files on the card.
 
 ## Configuration
 
@@ -313,6 +322,40 @@ mapping with that example, remove the unused logo widgets or map them as well.
 Here, `sd_display_image` exposes a Home Assistant dropdown and `logo_1` loads an
 initial image without creating a Select entity. All Selects offer the shared
 image list; prepare assets for the dimensions of the widgets that will use them.
+
+### Image provisioning and rebuild requirements
+
+The current architecture fixes the `display_images.images` allow-list (image
+names and SD paths), widget mappings, and Select options at compile time. Adding
+or changing these YAML entries requires rebuilding and flashing the firmware;
+uploading a new file does not automatically add it to the allow-list or create
+a widget or Home Assistant option.
+
+The image files themselves only need to be present on the mounted SD card when
+the device loads them: during startup for each widget's `initial_image`, or
+later when selected. They are not read from the SD card during compilation.
+The local `assets/sd-image-placeholder.svg` used by the example is different:
+it is a compiled asset and must be available on the build machine.
+
+To provision images through the SD web server with a single firmware build:
+
+1. Define the intended image names, paths, and widgets in YAML, then compile and
+   flash the complete configuration.
+2. Boot with a working, mounted SD card. Missing initial images leave their
+   widgets showing the placeholder; the HTTP file server still starts.
+3. Create the required folders and upload the files to the configured paths
+   through `/sd/`.
+4. Restart the device to load all initial images, including static widgets.
+   For a widget with a Select, choosing the uploaded image through Home Assistant
+   also triggers loading without a restart. Upload alone does not automatically
+   assign a previously missing image to its widget.
+
+If you start with the minimal file-server configuration, upload the images,
+and only then add their allow-list entries and widgets to YAML, that workflow
+requires a second build and flash. This is necessary because the configuration
+changed, not because compilation requires the files to exist on the card.
+Replacing file contents at an already configured path needs no rebuild;
+reselect the image or restart to load the replacement.
 
 ### Direct SD images and the Home Assistant dropdown
 
