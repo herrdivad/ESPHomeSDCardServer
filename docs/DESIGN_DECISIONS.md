@@ -23,9 +23,14 @@
 - The optional LVGL path uses a per-open-file read cache (16 kB by default) to
   combine small decoder reads before they reach FATFS/SDMMC.
 - Decoded image caching is opt-out, allocated on demand, strictly PSRAM-only,
-  capped at 1 MB by default, and uses least-recently-used eviction. The active
-  LVGL descriptor is never evicted. A failed allocation or missing PSRAM falls
-  back to the original `S:/` streaming path instead of consuming internal RAM.
+  defaults to a 1 MB budget, is user-configurable up to 4 MB, and uses
+  least-recently-used eviction. Cache entries are shared by normalized SD path
+  across all configured widgets, and no descriptor referenced by any widget is
+  ever evicted. A failed allocation or missing PSRAM falls back to the original
+  `S:/` streaming path instead of consuming internal RAM.
+- Multi-widget configuration uses one compiled image allow-list. Every widget
+  has its own initial selection and optional Home Assistant Select; omitting
+  `select` creates a static SD-backed widget without an HA entity.
 - Cache invalidation uses a generation counter for mapped upload, overwrite,
   and delete operations. The HTTP response format and browser transfer path do
   not depend on the decoded cache.

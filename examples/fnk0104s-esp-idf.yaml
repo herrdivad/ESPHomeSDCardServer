@@ -63,13 +63,11 @@ cyd_sd_http_server:
   max_upload_size: 200MB
   api_key: !secret sd_server_api_key
 
-  # Optional direct SD-to-LVGL image access. The select entity is exposed as a
-  # Home Assistant dropdown through the normal ESPHome API. Use baseline JPEG
-  # or an LVGL 9.5-compatible BIN image; PNG is not supported here.
-  display_image:
-    image_widget: sd_display_image
+  # Optional direct SD-to-LVGL image access. All widgets share one allow-list
+  # and PSRAM cache. A widget with select creates its own Home Assistant
+  # dropdown; omit select for a static SD-backed widget.
+  display_images:
     drive_letter: S
-    initial_image: Bild 1
     # Decoded RGB565 frames are allocated only in PSRAM and retained with LRU
     # eviction. 1 MB holds three 480x320 frames (307,200 bytes each). The
     # smaller per-file buffer reduces repeated FATFS seeks on the first load.
@@ -83,9 +81,32 @@ cyd_sd_http_server:
         path: /Bild1.jpg
       - name: Bild 2
         path: /images/Bild2.jpg
-    select:
-      id: sd_display_image_select
-      name: Display image
+      # Four prepared 160x240 RGB565 BIN files for the portrait 2x2 logo page.
+      - name: Logo 1
+        path: /icons/logo1.bin
+      - name: Logo 2
+        path: /icons/logo2.bin
+      - name: Logo 3
+        path: /icons/logo3.bin
+      - name: Logo 4
+        path: /icons/logo4.bin
+    widgets:
+      # Dynamic widget: gets its own Select entity in Home Assistant.
+      - image_widget: sd_display_image
+        initial_image: Bild 1
+        select:
+          id: sd_display_image_select
+          name: Display image
+      # Static widgets: initialized and cached by the component, but do not
+      # create unnecessary Home Assistant entities because select is omitted.
+      - image_widget: logo_1
+        initial_image: Logo 1
+      - image_widget: logo_2
+        initial_image: Logo 2
+      - image_widget: logo_3
+        initial_image: Logo 3
+      - image_widget: logo_4
+        initial_image: Logo 4
 
 # Display bus of the FNK0104S.
 spi:
@@ -135,6 +156,39 @@ lvgl:
             y: 0
             width: 320
             height: 480
+    # Four SD-backed images without an on_boot lambda. At 160x240 RGB565, all
+    # four decoded frames together use 307,200 bytes of the shared PSRAM cache.
+    - id: logo_page
+      bg_color: 0x000000
+      widgets:
+        - image:
+            id: logo_1
+            src: sd_image_placeholder
+            x: 0
+            y: 0
+            width: 160
+            height: 240
+        - image:
+            id: logo_2
+            src: sd_image_placeholder
+            x: 160
+            y: 0
+            width: 160
+            height: 240
+        - image:
+            id: logo_3
+            src: sd_image_placeholder
+            x: 0
+            y: 240
+            width: 160
+            height: 240
+        - image:
+            id: logo_4
+            src: sd_image_placeholder
+            x: 160
+            y: 240
+            width: 160
+            height: 240
 
 output:
   - platform: ledc

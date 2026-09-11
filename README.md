@@ -1,3 +1,21 @@
+> **Disclaimer — origin, AI-generated code, and scope**
+>
+> This project was inspired by the idea behind
+> [n-serrette/esphome_sd_card](https://github.com/n-serrette/esphome_sd_card),
+> but was rewritten from scratch, with approximately 99% of the code generated
+> through AI-assisted “vibe coding.” I started this rewrite because the original
+> `sd_mmc_card` configurations did not run reliably on my system and sometimes
+> produced errors with the latest ESP firmware available at the time. This
+> describes my experience with my setup, not a general assessment of the original
+> project's quality or compatibility.
+>
+> This code is developed and tested exclusively for my specific test hardware,
+> documented below. I provide no warranty and accept no responsibility for its
+> use on other hardware or in different projects. If this project interests or
+> inspires you, you are welcome to use it or fork it at your own risk. It includes
+> improvements and additional features for my use case, described in the rest of
+> this README.
+
 # CYD SD HTTP Server for ESPHome
 
 Native, streaming SD-card file transfer for the Freenove FNK0104S. The ESPHome
@@ -5,7 +23,7 @@ web server remains on port 80 and this component runs an independent ESP-IDF
 HTTP server on port 8080. Firmware OTA remains the normal ESPHome OTA service;
 file uploads never use multipart handling or firmware-OTA internals.
 
-## Support status
+## Target hardware and test status
 
 This implementation targets only:
 
@@ -15,14 +33,33 @@ This implementation targets only:
 - 8 MB octal PSRAM at 80 MHz
 - four-bit SDMMC: CLK 38, CMD 40, D0 39, D1 41, D2 48, D3 47
 
-It has been host-tested locally and has reached the first FNK0104S hardware
-boot test. That test identified the required 16 KiB `loopTask` stack for direct
-JPEG rendering; functional and endurance tests remain open in the
-[hardware matrix](docs/HARDWARE_TEST_MATRIX.md). Arduino, other ESP32 variants,
-other boards, SPI SD cards, hotplug, TLS and public internet exposure are
-unsupported.
+Basic functional tests have already been performed by the maintainer on real
+FNK0104S hardware. Image display, RAM/PSRAM usage, Home Assistant Selects, and
+the web file manager's upload, download, folder, and delete operations work
+reliably in those tests.
+
+Still pending are systematic tests of failures and recovery, simultaneous
+access by multiple clients, operator mistakes, power interruptions, and SD-card
+failure or corruption, as well as extended stress and endurance testing.
+Implemented safeguards are described below; their presence is not proof that
+every failure scenario has been validated on hardware.
+
+The [hardware matrix](docs/HARDWARE_TEST_MATRIX.md) and older development notes
+contain historical, incomplete test records. Their “Not run” entries do not
+override the maintainer's basic functional results summarized here, nor do those
+results establish that every detailed matrix scenario has passed.
+
+The versions above identify the reference environment, not a promise of
+compatibility with every newer release. Arduino, other ESP32 variants, other
+boards, SPI SD cards, hotplug, TLS and public internet exposure are unsupported.
 
 ## Features
+
+The original project provided the starting idea of SD-card access and browser
+file management. This rewrite focuses on bounded transfer memory, an independent
+HTTP service, guarded file replacement, and direct SD-to-LVGL image display with
+Home Assistant integration. These are improvements for the target setup; no
+comparative performance benchmark against the original project is claimed.
 
 - Native `esp_http_server`, independent of `web_server_base` and `USE_WEBSERVER_OTA`
 - required `X-API-Key` with a constant-work comparison
@@ -41,24 +78,170 @@ unsupported.
 - direct baseline-JPEG and LVGL-BIN rendering from SD without the local HTTP
   loop used by `online_image`
 - configurable 16 kB LVGL file-read cache plus an optional, dynamically
-  allocated PSRAM LRU cache capped at 1 MB for decoded RGB565 frames
-- a static YAML name-to-path allow-list exposed as an ESPHome Select entity for
-  changing the displayed image from Home Assistant
+  allocated PSRAM LRU cache for decoded RGB565 frames (1 MB default, up to
+  4 MB)
+- one shared YAML name-to-path allow-list for any number of LVGL image widgets;
+  each widget can optionally expose its own independent Home Assistant Select
 - streaming Python uploader and an explicit real-device smoke-test script
 
-## Configuration
+## Do's and don'ts
 
-Copy [the FNK0104S example](examples/fnk0104s-esp-idf.yaml) into your ESPHome
-configuration directory and point the local external component path at
-`components`. Copy `examples/secrets.example.yaml` to the ignored
-`examples/secrets.yaml`, then replace every placeholder—especially the API key
-with a random value of at least 32 bytes.
+| Do | Don't |
+|---|---|
+| Start with the documented FNK0104S pins and ESP-IDF configuration. | Assume that another “CYD” board has the same wiring or is supported. |
+| Use a prepared FAT32 card, keep backups, and power down before removing it. | Treat the card as the only copy of important data or assume hotplug support. |
+| Keep `format_if_mount_failed: false` for normal use. | Enable automatic formatting to troubleshoot an unexplained mount failure; it can erase the card. |
+| Keep a strong API key in `secrets.yaml` and restrict access to a trusted LAN. | Commit credentials or expose the plain-HTTP service to the internet. |
+| Upload one file at a time, create parent folders first, and opt into overwrites deliberately. | Send multipart or chunked uploads, assume recursive folder creation/deletion, or expect parallel upload support. |
+| Use virtual paths such as `/images/photo.jpg` and URL-encode query values. | Pass `/sdcard/...`, `S:/...`, traversal segments, or internal `.cyd-upload-` / `.cyd-backup-` names to the HTTP API. |
+| Prepare baseline JPEG or compatible LVGL BIN assets at the intended display dimensions. | Use PNG or progressive JPEG directly in the SD image display path, or assume any `.bin` file is an image. |
+| Keep the 16 KiB loop-task stack for JPEG rendering and budget PSRAM for all components. | Assume the cache limit reserves memory or increase it without checking available PSRAM. |
+| Handle errors and verify important transfers, for example with the Python uploader's `--verify`. | Treat recovery logic as a guarantee against power loss, card failure, or user mistakes. |
+
+## Installation
+
+Use one of the following external-component sources. ESPHome documents both
+source types in its [External Components guide](https://esphome.io/components/external_components/).
+
+### Option A: local checkout
+
+Download or clone this repository onto the machine that runs ESPHome. Keeping
+the example in its original directory gives this layout:
+
+```text
+DavsESPHomeSDCardServer/
+├── components/
+│   └── cyd_sd_http_server/
+└── examples/
+    ├── fnk0104s-esp-idf.yaml
+    ├── secrets.yaml
+    └── assets/
+        └── sd-image-placeholder.svg
+```
+
+In `examples/fnk0104s-esp-idf.yaml`, use:
 
 ```yaml
 external_components:
   - source:
       type: local
       path: ../components
+    components: [cyd_sd_http_server]
+```
+
+The path is relative to the device YAML file and points to the directory
+containing `cyd_sd_http_server`, not to the component directory itself. If you
+move the YAML into another ESPHome configuration directory, adjust this path.
+For a container or Home Assistant ESPHome installation, the checkout must be
+accessible inside the environment running ESPHome.
+
+### Option B: GitHub repository (placeholder)
+
+Replace `YOUR_GITHUB_USER`, `YOUR_REPOSITORY`, and `YOUR_TAG_OR_COMMIT` with the
+actual repository and revision before validating this configuration:
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/YOUR_GITHUB_USER/YOUR_REPOSITORY.git
+      ref: YOUR_TAG_OR_COMMIT
+    components: [cyd_sd_http_server]
+```
+
+Pin a known revision for reproducible builds. This source loads the component;
+copy the device example and its `assets/sd-image-placeholder.svg` separately if
+you want the complete display demo. Keep `assets/` next to the copied YAML, or
+adjust the example's `image.file` path.
+
+### Secrets and first installation
+
+Create `secrets.yaml` next to your device YAML using
+[secrets.example.yaml](examples/secrets.example.yaml) as the template:
+
+```yaml
+wifi_ssid: "YOUR_WIFI_SSID"
+wifi_password: "YOUR_WIFI_PASSWORD"
+sd_server_api_key: "REPLACE_WITH_A_RANDOM_KEY_OF_AT_LEAST_32_BYTES"
+```
+
+Generate a key locally, for example with `openssl rand -hex 32`, and paste the
+result into `sd_server_api_key`. Replace all placeholders before use. The
+component requires at least 32 UTF-8 bytes; the placeholder is not a secret.
+`examples/secrets.yaml` is ignored by this repository; if you move it elsewhere,
+ensure your own repository also ignores it.
+
+With ESPHome 2026.8.0 available, run these commands from the repository root
+after preparing the example and secrets:
+
+```bash
+esphome config examples/fnk0104s-esp-idf.yaml
+esphome compile examples/fnk0104s-esp-idf.yaml
+esphome upload examples/fnk0104s-esp-idf.yaml --device /dev/ttyACM0
+```
+
+Replace `/dev/ttyACM0` with your board's serial port. For subsequent firmware
+updates, use normal ESPHome OTA or the ESPHome dashboard. The SD upload endpoint
+stores files only; it does not flash firmware.
+
+After boot, open `http://fnk0104s-sd-server.local:8080/sd/` (or use the device's
+IP address), enter the API key, and upload your files. The full display example
+expects the JPEG and logo files listed under `display_images.images`; create
+their folders and upload them, or adapt the mapping and widgets to your assets.
+Restart after initially provisioning the assets to load all initial images.
+
+## Configuration
+
+### Minimal file server
+
+This is a complete device configuration for the target board's SD file server,
+without the optional display integration. It uses the local source layout above;
+replace only `external_components` to use the GitHub source instead. Wi-Fi
+credentials and the API key come from the adjacent `secrets.yaml`.
+
+```yaml
+esphome:
+  name: fnk0104s-sd-server
+  friendly_name: FNK0104S SD Server
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    advanced:
+      loop_task_stack_size: 16384
+      include_builtin_idf_components:
+        - fatfs
+      disable_vfs_support_termios: false
+      disable_vfs_support_select: false
+      disable_vfs_support_dir: false
+    sdkconfig_options:
+      CONFIG_FATFS_LFN_STACK: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+
+ota:
+  - platform: esphome
+
+web_server:
+  port: 80
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [cyd_sd_http_server]
 
 cyd_sd_http_server:
   id: cyd_sd_server
@@ -76,10 +259,35 @@ cyd_sd_http_server:
   data3_pin: GPIO47
   max_upload_size: 200MB
   api_key: !secret sd_server_api_key
-  display_image:
-    image_widget: sd_display_image
+```
+
+`format_if_mount_failed` defaults to false. Internal pull-ups only supplement
+suitable board-level pull-ups. The 200 MB upload limit is the configuration
+default, not a hardware-tested maximum file size or a reserved RAM allocation.
+
+| Setting | Default / requirement |
+|---|---|
+| `api_key` | Required; at least 32 UTF-8 bytes. |
+| `port` | `8080`; keep distinct from other HTTP listeners. |
+| `control_port` | `32769`; internal ESP-IDF HTTP server UDP control socket, distinct from `port` and other server control ports. |
+| `mount_point` / `url_prefix` | Only `/sdcard` / `/sd` are accepted. |
+| `bus_width` | `4`; accepts `1` or `4`, but only the documented four-bit setup is the test target. |
+| SDMMC pins | CLK, CMD, and D0 are required; D1–D3 are required for four-bit mode and must be omitted for one-bit mode. |
+| `max_upload_size` | `200MB`; configurable from 1 to 2,147,483,647 bytes. |
+| `display_images` | Optional; requires existing LVGL image widgets. |
+
+### Optional image configuration
+
+For the full display setup, start with
+[the FNK0104S example](examples/fnk0104s-esp-idf.yaml), which includes the display,
+backlight, placeholder asset, and LVGL widgets. The following block belongs
+**inside the existing `cyd_sd_http_server:` section**. Both widget IDs must exist
+under `lvgl`; they are already defined in the full example. If using this reduced
+mapping with that example, remove the unused logo widgets or map them as well.
+
+```yaml
+  display_images:
     drive_letter: S
-    initial_image: Bild 1
     cache:
       max_size: 1MB
       file_buffer_size: 16kB
@@ -90,26 +298,42 @@ cyd_sd_http_server:
         path: /Bild1.jpg
       - name: Bild 2
         path: /images/Bild2.jpg
-    select:
-      id: sd_display_image_select
-      name: Display image
+      - name: Logo 1
+        path: /icons/logo1.bin
+    widgets:
+      - image_widget: sd_display_image
+        initial_image: Bild 1
+        select:
+          id: sd_display_image_select
+          name: Display image
+      - image_widget: logo_1
+        initial_image: Logo 1
 ```
 
-`format_if_mount_failed` defaults to false. Do not enable it casually: an
-unknown or damaged filesystem could otherwise be reformatted. Internal pull-ups
-only supplement suitable board-level pull-ups. The example upload limit is a
-starting value, not a hardware-tested recommendation.
+Here, `sd_display_image` exposes a Home Assistant dropdown and `logo_1` loads an
+initial image without creating a Select entity. All Selects offer the shared
+image list; prepare assets for the dimensions of the widgets that will use them.
 
 ### Direct SD images and the Home Assistant dropdown
 
-`display_image` is optional. When configured, the component registers a
-read-only LVGL drive (default `S:`), connects it to the named LVGL image widget,
-and creates the configured ESPHome Select entity. Home Assistant discovers that
-entity through the normal ESPHome API and shows `Bild 1`, `Bild 2`, and the
-other configured names as dropdown options. Selecting an option changes the
-widget source to a decoded PSRAM descriptor when caching succeeds, or to the
-mapped SD path such as `S:/Bild1.jpg` in streaming fallback mode. The path
-itself is not supplied by Home Assistant.
+`display_images` is optional. When configured, the component registers a
+read-only LVGL drive (default `S:`) and connects every entry under `widgets` to
+the shared `images` allow-list and PSRAM cache. During setup it loads each
+widget's `initial_image`, so direct SD widgets do not require an `on_boot`
+lambda.
+
+A widget with `select:` creates its own independent ESPHome Select entity.
+Home Assistant discovers each entity through the normal ESPHome API and shows
+the shared image names as dropdown options. Selecting an option changes only
+that widget and publishes only that Select's state. A widget without `select:`
+is initialized and cached in exactly the same way but creates no unnecessary
+Home Assistant entity. `image_widget` IDs must be unique.
+
+The source becomes a decoded PSRAM descriptor when caching succeeds, or a
+mapped SD path such as `S:/Bild1.jpg` in streaming fallback mode. Home Assistant
+only sends a selected option; it never supplies an arbitrary path. The former
+single-widget `display_image` schema remains accepted for existing YAML, but
+new configurations should use `display_images`.
 
 The complete display, placeholder widget, and mapping are shown in
 [the FNK0104S example](examples/fnk0104s-esp-idf.yaml). The one-pixel compiled
@@ -121,7 +345,7 @@ For the full build-to-display flow, including the generated Home Assistant
 dropdown and live SD reads, see
 [Direct SD Image Workflow](docs/DIRECT_SD_IMAGE_WORKFLOW.md).
 
-This first direct-image implementation accepts:
+The direct-image path accepts:
 
 - `.jpg` and `.jpeg`: baseline JPEG decoded incrementally by LVGL Tiny JPEG;
 - `.bin`: an LVGL 9.5-compatible binary image asset.
@@ -132,11 +356,32 @@ baseline JPEG at the display's intended dimensions (320 x 480 in the example).
 The `cache` block is optional and defaults to the values shown above. It does
 not reserve 1 MB at boot. The component allocates decoded RGB565 frames from
 PSRAM on demand and evicts the least recently used inactive frame before the
-configured limit would be exceeded. A 480 x 320 or 320 x 480 RGB565 frame uses
-307,200 bytes, so the default 1 MB budget holds three full-screen images. Cache
-hits avoid reading and decoding the image body (a small existence probe still
-opens the mapped SD file); the display still has to copy the frame through LVGL
-and SPI. The first load remains a decode operation.
+configured limit would be exceeded. `max_size` may be configured from `0` to
+`4MB`; 1 MB remains the conservative default. A 480 x 320 or 320 x 480 RGB565
+frame uses 307,200 bytes, so the default budget holds three full-screen images.
+Cache hits avoid reading and decoding the image body (a small existence probe
+still opens the mapped SD file); the display still has to copy the frame
+through LVGL and SPI. The first load remains a decode operation.
+
+A larger limit is only a budget, not a guaranteed reservation. Allocation
+still happens per decoded image and exclusively in PSRAM. Choose 4 MB only on
+devices with enough free PSRAM for LVGL, display buffers, decoders, and all
+other components. If an allocation fails, the affected image safely falls back
+to direct `S:/...` streaming.
+
+The decoded cache is shared by SD path across all configured widgets. If two
+widgets show the same file, both descriptors reference one RGB565 allocation.
+Eviction scans every widget and never frees an entry that is still assigned to
+any of them. If the sum of simultaneously referenced unique images is larger
+than `max_size`, entries that cannot fit use the safe `S:/...` streaming
+fallback instead of exceeding the limit.
+
+Four 240 x 160 RGB565 logo widgets together use 307,200 bytes. Define all four
+under `widgets` and their paths under the shared `images` list; the component
+preloads them during setup, after which returning to their LVGL page draws from
+PSRAM without a boot lambda. See the complete portrait-oriented 2x2 example in
+[the FNK0104S configuration](examples/fnk0104s-esp-idf.yaml); for a rotated
+480 x 320 layout, prepare each file as 240 x 160.
 
 `file_buffer_size` belongs to each LVGL image file while it is open. It turns
 the BIN decoder's small line reads into fewer larger FATFS/SDMMC reads and also
@@ -147,13 +392,15 @@ allocation fails, the component logs the reason and uses the original
 `S:/...` streaming path.
 
 Replacing or deleting a mapped image through the HTTP API invalidates the
-decoded generation. The currently displayed pixels remain valid, but the next
-selection reloads the changed file instead of returning stale cached data.
+decoded generation. Pixels currently referenced by widgets remain valid, but
+the next selection reloads the changed file instead of returning stale cached
+data.
 
-The reference FNK0104S example build with this feature occupies about 1.10 MB
-of its 1.835 MB OTA application partition (about 60%), leaving roughly 0.74 MB
-for normal ESPHome entities, automations, and display work. The 16 KiB stack
-setting adds 8 KiB of internal RAM compared with the default and has no
+An earlier reference FNK0104S example build with direct-image support occupied
+about 1.10 MB of its 1.835 MB OTA application partition (about 60%), leaving roughly 0.74 MB
+for normal ESPHome entities, automations, and display work. Treat these figures
+as a recorded example, and check the size reported by your own build. The 16 KiB
+stack setting adds 8 KiB of internal RAM compared with the default and has no
 meaningful flash impact. Much larger features such as a camera, voice stack,
 TLS-heavy integrations, or additional media decoders should be compiled and
 checked against the same partition budget before being added.
@@ -178,8 +425,8 @@ the smaller default.
 
 ### Required ESP32 framework settings
 
-When `display_image` uses direct JPEG files, configure the ESPHome main loop
-task with 16 KiB of stack:
+When `display_images` or the compatible `display_image` form uses direct JPEG
+files, configure the ESPHome main loop task with 16 KiB of stack:
 
 ```yaml
 esp32:
@@ -189,6 +436,9 @@ esp32:
       loop_task_stack_size: 16384
       include_builtin_idf_components:
         - fatfs
+      disable_vfs_support_termios: false
+      disable_vfs_support_select: false
+      disable_vfs_support_dir: false
     sdkconfig_options:
       CONFIG_FATFS_LFN_STACK: "y"
 ```
@@ -211,6 +461,11 @@ JPEG decoder.
 Every `/sd/api/*` request requires `X-API-Key`. The UI is at
 `http://DEVICE:8080/sd/`.
 
+Paths are relative to the SD-card root: `/photos/photo.jpg` is a virtual path,
+`/sdcard/photos/photo.jpg` is its internal filesystem location, and
+`S:/photos/photo.jpg` is the LVGL path. Use only the first form in API requests
+and image mappings.
+
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/sd/api/health` | mount/card/capacity/version/upload/uptime status |
@@ -221,15 +476,55 @@ Every `/sd/api/*` request requires `X-API-Key`. The UI is at
 | `POST` | `/sd/api/directory?path=/media` | create one directory |
 | `DELETE` | `/sd/api/directory?path=/media` | delete an empty directory only |
 
-Upload example:
+The examples below use Bash. Set the device URL and read the API key without
+putting its literal value in shell history:
+
+```bash
+SD_BASE_URL='http://fnk0104s-sd-server.local:8080'
+read -r -s -p 'SD API key: ' SD_API_KEY
+export SD_API_KEY
+```
+
+Check health and create the destination folder (skip creation if it exists):
+
+```bash
+curl --fail-with-body --show-error \
+  -H "X-API-Key: $SD_API_KEY" "$SD_BASE_URL/sd/api/health"
+
+curl --fail-with-body --show-error -X POST \
+  -H "X-API-Key: $SD_API_KEY" \
+  "$SD_BASE_URL/sd/api/directory?path=%2Fphotos"
+```
+
+Upload a file as a raw body with a known `Content-Length`. Do not use `curl -F`
+or pipe an unknown-length body. The Python uploader below is the streaming
+client for larger files.
 
 ```bash
 curl --fail-with-body --show-error \
   -H "X-API-Key: $SD_API_KEY" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @./photo.jpg \
-  "http://device.local:8080/sd/api/file?path=%2Fphoto.jpg&overwrite=false"
+  "$SD_BASE_URL/sd/api/file?path=%2Fphotos%2Fphoto.jpg&overwrite=false"
 ```
+
+List the directory and download the file to the host:
+
+```bash
+curl --fail-with-body --show-error \
+  -H "X-API-Key: $SD_API_KEY" \
+  "$SD_BASE_URL/sd/api/list?path=%2Fphotos&offset=0&limit=100"
+
+curl --fail-with-body --show-error \
+  -H "X-API-Key: $SD_API_KEY" \
+  --output ./downloaded-photo.jpg \
+  "$SD_BASE_URL/sd/api/file?path=%2Fphotos%2Fphoto.jpg"
+```
+
+Use `overwrite=true` only when replacement is intended. Deleting a file uses
+`DELETE /sd/api/file`; a directory must be empty before `DELETE /sd/api/directory`
+will remove it. Neither upload nor directory creation creates missing parent
+directories recursively.
 
 Responses use a stable JSON envelope. Errors include the operation, virtual
 path, machine-readable storage/request error, message, `errno` where applicable
@@ -244,15 +539,17 @@ clients such as ESPHome `online_image` reliably detect the end of a file.
 
 ## Python uploader
 
-The uploader reads `SD_API_KEY` or asks without echoing the key:
+The uploader uses Python's standard library, streams the request body, and reads
+`SD_API_KEY` or prompts without echoing the key. Create `/photos` first:
 
 ```bash
-SD_API_KEY='…' python scripts/upload_file.py \
-  http://device.local:8080 ./photo.jpg /photos/photo.jpg --verify
+python3 scripts/upload_file.py \
+  http://fnk0104s-sd-server.local:8080 ./photo.jpg /photos/photo.jpg --verify
 ```
 
 `--verify` downloads to an OS temporary file, compares SHA-256 and removes only
 that local temporary file. It does not delete the remote upload.
+Add `--overwrite` to replace an existing target deliberately.
 
 ## Host-side LVGL BIN converter
 
@@ -263,13 +560,15 @@ height is supplied, exact resizing when both are supplied, clockwise rotation,
 and configurable compositing for transparent PNGs.
 
 ```bash
+python3 -m venv .venv
 .venv/bin/python -m pip install -r add_tools/requirements.txt
 .venv/bin/python add_tools/image_to_lvgl_bin.py input.png \
   --rotate 90 --width 240 --height 160 --output logo.bin
 ```
 
 Conversion happens entirely on the host computer and does not connect to or
-modify the microcontroller.
+modify the microcontroller. If `.venv` already exists, reuse it and skip its
+creation.
 
 ## Local validation
 
@@ -286,9 +585,11 @@ separate `scripts/hardware_smoke_test.py` is never part of local tests and must
 only be invoked deliberately against a physical device.
 
 Only `secrets.example.yaml` is checked in; a real `secrets.yaml` remains ignored.
-Build details and design constraints are recorded in
+Historical build details and design constraints are recorded in
 [BUILD_ENVIRONMENT.md](docs/BUILD_ENVIRONMENT.md) and
-[DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md).
+[DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md). Earlier environment restrictions
+recorded there do not describe the maintainer's current hardware test status;
+see [Target hardware and test status](#target-hardware-and-test-status).
 
 ## Security and known limitations
 
@@ -297,8 +598,10 @@ LAN, firewall port 8080 and never expose the server to the internet. There is no
 per-user authorization, TLS, brute-force throttling, recursive delete or SD
 hotplug support.
 
-FATFS is not a transactional filesystem. The implementation prevents a failed
-or interrupted body transfer from replacing an existing target and restores a
-renamed backup on the next boot when possible, but complete power-loss atomicity
-cannot be promised until it is characterized on the real card and deployed IDF
-build. Directory timestamps are best-effort without configured system time.
+FATFS is not a transactional filesystem. Uploads are staged in temporary files
+so a failed body transfer does not directly overwrite the existing target.
+The component attempts to restore interrupted overwrite backups at the next
+boot. These safeguards cannot guarantee data integrity during power loss,
+filesystem corruption, or physical card failure. Fault-injection and recovery
+tests on the real card and deployed IDF build remain pending. Keep independent
+backups. Directory timestamps are best-effort without configured system time.

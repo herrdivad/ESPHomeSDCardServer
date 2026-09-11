@@ -1,8 +1,8 @@
 # Hardware test matrix
 
-No physical-device tests were run during this implementation. Every row remains
-open until it is executed on the target FNK0104S and the result, card model,
-ESPHome build and log excerpt are recorded.
+No physical-device tests were run from this repository environment. Rows marked
+as passed are based on logs supplied from the user's FNK0104S; all other rows
+remain open until they are executed on the target hardware and recorded.
 
 | Test | Status |
 |---|---|
@@ -15,14 +15,20 @@ ESPHome build and log excerpt are recorded.
 | Client/WLAN interruption cleans temporary file | Not run |
 | Two uploads cause one 409 response | Not run |
 | Large streamed download and SHA-256 match | Not run |
-| Initial baseline JPEG renders directly from `S:` using `loop_task_stack_size: 16384` | Needs retest (8 KiB stack overflow observed) |
+| Initial baseline JPEG renders using `loop_task_stack_size: 16384` | Passed in user-supplied 0.3.0 log |
 | Home Assistant Select switches between mapped JPEG files | Not run |
 | Missing mapped image keeps the previous image and selection | Not run |
-| First cache miss decodes one 480 x 320 image into PSRAM | Not run |
+| First cache miss decodes one 480 x 320 image into PSRAM | Passed: 307,200 bytes, 277 ms decoder/cache copy |
 | Re-selecting a cached image logs `HIT` without another SD decode | Not run |
-| Leaving and returning to the image page redraws in 300-500 ms or less | Not run |
+| Leaving and returning to the image page redraws in 300-500 ms or less | Passed: approximately 156 ms reported |
+| Multiple widget initial images preload without an `on_boot` lambda | Not run |
+| Two widgets sharing one path use one decoded PSRAM allocation | Not run |
+| Independent widget Select entities update only their own widget/state | Not run |
+| Static widget without `select` creates no Home Assistant entity | Not run |
+| Cache eviction never frees an entry referenced by any widget | Not run |
 | Fourth full-screen image evicts the least recently used inactive entry | Not run |
 | Decoded cache remains at or below the configured 1 MB limit | Not run |
+| A configured 4 MB cache stays within its budget and leaves enough PSRAM for LVGL | Not run |
 | `max_size: 0` and unavailable PSRAM use the `S:/` streaming fallback | Not run |
 | Upload/overwrite/delete invalidates mapped cached image data | Not run |
 | Browser download still works while direct-image support is enabled | Not run |

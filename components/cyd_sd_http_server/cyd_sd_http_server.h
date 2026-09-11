@@ -42,16 +42,15 @@ class CydSdHttpServer : public Component {
   void set_api_key(const std::string &value) { this->api_key_ = value; }
 
 #ifdef USE_CYD_SD_LVGL
-  void set_image_widget(lv_obj_t *widget) { this->image_widget_ = widget; }
   void set_lvgl_drive_letter(const std::string &value) { this->lvgl_drive_letter_ = value[0]; }
   void set_decoded_image_cache_size(size_t value) { this->decoded_image_cache_size_ = value; }
   void set_lvgl_file_cache_size(size_t value) { this->lvgl_file_cache_size_ = value; }
   void add_display_image(const std::string &name, const std::string &path) {
     this->display_images_.push_back({name, path});
   }
-  void set_initial_image(size_t index) { this->initial_image_index_ = index; }
-  void set_image_select(CydSdImageSelect *image_select) { this->image_select_ = image_select; }
-  bool select_image(size_t index);
+  void add_display_image_widget(lv_obj_t *widget, size_t initial_image_index, const std::string &name);
+  void set_image_select(size_t widget_index, CydSdImageSelect *image_select);
+  bool select_image(size_t widget_index, size_t image_index);
 #endif
 
   void setup() override;
@@ -123,8 +122,19 @@ class CydSdHttpServer : public Component {
     const void *source() const { return &this->descriptor; }
   };
 
+  struct DisplayImageWidget {
+    lv_obj_t *widget{nullptr};
+    CydSdImageSelect *image_select{nullptr};
+    std::string name;
+    size_t initial_image_index{0};
+    size_t selected_image_index{0};
+    CachedImage *active_cached_image{nullptr};
+    std::string active_lvgl_source;
+  };
+
   bool register_lvgl_file_system_();
   bool is_mapped_image_path_(const std::string &virtual_path) const;
+  bool is_cache_entry_referenced_(const CachedImage *entry) const;
   CachedImage *find_cached_image_(const std::string &virtual_path, uint32_t generation);
   std::unique_ptr<CachedImage> decode_image_to_cache_(const std::string &virtual_path, uint32_t generation);
   bool copy_decoded_area_(uint8_t *destination, uint32_t destination_stride, const lv_area_t &area,
@@ -164,33 +174,30 @@ class CydSdHttpServer : public Component {
   SdStorage storage_;
 
 #ifdef USE_CYD_SD_LVGL
-  lv_obj_t *image_widget_{nullptr};
-  CydSdImageSelect *image_select_{nullptr};
   char lvgl_drive_letter_{'S'};
   lv_fs_drv_t lvgl_fs_driver_{};
   bool lvgl_fs_registered_{false};
   std::vector<DisplayImage> display_images_;
-  size_t initial_image_index_{0};
-  size_t selected_image_index_{0};
+  std::vector<DisplayImageWidget> display_image_widgets_;
   size_t decoded_image_cache_size_{0};
   size_t decoded_image_cache_used_{0};
   size_t lvgl_file_cache_size_{0};
   uint64_t cache_use_counter_{0};
   std::atomic<uint32_t> mapped_image_generation_{0};
   std::vector<std::unique_ptr<CachedImage>> decoded_image_cache_;
-  CachedImage *active_cached_image_{nullptr};
-  std::string active_lvgl_source_;
 #endif
 };
 
 #ifdef USE_CYD_SD_LVGL
 class CydSdImageSelect : public select::Select {
  public:
-  explicit CydSdImageSelect(CydSdHttpServer *parent) : parent_(parent) {}
+  CydSdImageSelect(CydSdHttpServer *parent, size_t widget_index)
+      : parent_(parent), widget_index_(widget_index) {}
 
  protected:
   void control(size_t index) override;
   CydSdHttpServer *parent_;
+  size_t widget_index_;
 };
 #endif
 

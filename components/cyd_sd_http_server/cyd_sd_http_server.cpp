@@ -25,7 +25,7 @@ namespace esphome {
 namespace cyd_sd_http_server {
 
 static const char *const TAG = "cyd_sd_http";
-static const char *const SERVER_VERSION = "0.3.0";
+static const char *const SERVER_VERSION = "0.4.0";
 static constexpr size_t STREAM_BUFFER_SIZE = 8192;
 static constexpr size_t MAX_QUERY_LENGTH = 1024;
 static constexpr size_t MAX_LIST_LIMIT = 100;
@@ -134,11 +134,17 @@ void CydSdHttpServer::setup() {
   if (mount_error != ESP_OK)
     this->status_set_error(LOG_STR("SD mount failed"));
 #ifdef USE_CYD_SD_LVGL
-  if (mount_error == ESP_OK && !this->display_images_.empty()) {
+  if (mount_error == ESP_OK && !this->display_images_.empty() && !this->display_image_widgets_.empty()) {
     if (!this->register_lvgl_file_system_()) {
       ESP_LOGE(TAG, "Direct LVGL SD image access could not be initialized");
-    } else if (!this->select_image(this->initial_image_index_)) {
-      ESP_LOGW(TAG, "Initial SD display image is unavailable; keeping the configured LVGL placeholder");
+    } else {
+      for (size_t widget_index = 0; widget_index < this->display_image_widgets_.size(); widget_index++) {
+        const auto &widget = this->display_image_widgets_[widget_index];
+        if (!this->select_image(widget_index, widget.initial_image_index)) {
+          ESP_LOGW(TAG, "Initial SD image for widget %s is unavailable; keeping its LVGL placeholder",
+                   widget.name.c_str());
+        }
+      }
     }
   }
 #endif
@@ -177,6 +183,14 @@ void CydSdHttpServer::dump_config() {
   ESP_LOGCONFIG(TAG, "  Display image mappings: %u", static_cast<unsigned>(this->display_images_.size()));
   for (const auto &image : this->display_images_)
     ESP_LOGCONFIG(TAG, "    %s -> %c:%s", image.name.c_str(), this->lvgl_drive_letter_, image.virtual_path.c_str());
+  ESP_LOGCONFIG(TAG, "  Display image widgets: %u", static_cast<unsigned>(this->display_image_widgets_.size()));
+  for (const auto &widget : this->display_image_widgets_) {
+    const char *selected = widget.selected_image_index < this->display_images_.size()
+                               ? this->display_images_[widget.selected_image_index].name.c_str()
+                               : "<invalid>";
+    ESP_LOGCONFIG(TAG, "    %s: %s (%s)", widget.name.c_str(), selected,
+                  widget.image_select != nullptr ? "Home Assistant Select" : "static");
+  }
 #endif
 }
 
@@ -196,8 +210,20 @@ CydSdHttpServer::CachedImage::~CachedImage() {
 }
 
 void CydSdImageSelect::control(size_t index) {
-  if (!this->parent_->select_image(index))
-    ESP_LOGW(TAG, "Display image selection index %u failed", static_cast<unsigned>(index));
+  if (!this->parent_->select_image(this->widget_index_, index))
+    ESP_LOGW(TAG, "Display image selection widget=%u image=%u failed", static_cast<unsigned>(this->widget_index_),
+             static_cast<unsigned>(index));
+}
+
+void CydSdHttpServer::add_display_image_widget(lv_obj_t *widget, size_t initial_image_index,
+                                                const std::string &name) {
+  this->display_image_widgets_.push_back(
+      {widget, nullptr, name, initial_image_index, initial_image_index, nullptr, {}});
+}
+
+void CydSdHttpServer::set_image_select(size_t widget_index, CydSdImageSelect *image_select) {
+  if (widget_index < this->display_image_widgets_.size())
+    this->display_image_widgets_[widget_index].image_select = image_select;
 }
 
 bool CydSdHttpServer::register_lvgl_file_system_() {
@@ -236,6 +262,13 @@ bool CydSdHttpServer::is_mapped_image_path_(const std::string &virtual_path) con
                      [&virtual_path](const DisplayImage &image) { return image.virtual_path == virtual_path; });
 }
 
+bool CydSdHttpServer::is_cache_entry_referenced_(const CachedImage *entry) const {
+  if (entry == nullptr)
+    return false;
+  return std::any_of(this->display_image_widgets_.begin(), this->display_image_widgets_.end(),
+                     [entry](const DisplayImageWidget &widget) { return widget.active_cached_image == entry; });
+}
+
 CydSdHttpServer::CachedImage *CydSdHttpServer::find_cached_image_(const std::string &virtual_path,
                                                                   uint32_t generation) {
   for (const auto &entry : this->decoded_image_cache_) {
@@ -251,7 +284,7 @@ bool CydSdHttpServer::ensure_cache_space_(size_t required) {
   while (this->decoded_image_cache_used_ > this->decoded_image_cache_size_ - required) {
     CachedImage *oldest = nullptr;
     for (const auto &entry : this->decoded_image_cache_) {
-      if (entry.get() == this->active_cached_image_)
+      if (this->is_cache_entry_referenced_(entry.get()))
         continue;
       if (oldest == nullptr || entry->last_used < oldest->last_used)
         oldest = entry.get();
@@ -264,7 +297,7 @@ bool CydSdHttpServer::ensure_cache_space_(size_t required) {
 }
 
 void CydSdHttpServer::evict_cache_entry_(CachedImage *entry) {
-  if (entry == nullptr || entry == this->active_cached_image_)
+  if (entry == nullptr || this->is_cache_entry_referenced_(entry))
     return;
   const auto found = std::find_if(this->decoded_image_cache_.begin(), this->decoded_image_cache_.end(),
                                   [entry](const std::unique_ptr<CachedImage> &candidate) {
@@ -286,7 +319,7 @@ void CydSdHttpServer::evict_stale_cache_entries_(uint32_t generation) {
   while (true) {
     CachedImage *stale = nullptr;
     for (const auto &entry : this->decoded_image_cache_) {
-      if (entry.get() != this->active_cached_image_ && entry->generation != generation) {
+      if (!this->is_cache_entry_referenced_(entry.get()) && entry->generation != generation) {
         stale = entry.get();
         break;
       }
@@ -445,15 +478,19 @@ std::unique_ptr<CydSdHttpServer::CachedImage> CydSdHttpServer::decode_image_to_c
   return entry;
 }
 
-bool CydSdHttpServer::select_image(size_t index) {
-  if (!this->lvgl_fs_registered_ || this->image_widget_ == nullptr || index >= this->display_images_.size())
+bool CydSdHttpServer::select_image(size_t widget_index, size_t image_index) {
+  if (!this->lvgl_fs_registered_ || widget_index >= this->display_image_widgets_.size() ||
+      image_index >= this->display_images_.size())
     return false;
 
-  const DisplayImage &image = this->display_images_[index];
+  DisplayImageWidget &widget = this->display_image_widgets_[widget_index];
+  if (widget.widget == nullptr)
+    return false;
+  const DisplayImage &image = this->display_images_[image_index];
   DownloadContext probe;
   const StorageResult open_result = this->storage_.open_download(image.virtual_path, &probe);
   if (!open_result.ok()) {
-    ESP_LOGW(TAG, "Cannot select SD image %s: %s", image.virtual_path.c_str(),
+    ESP_LOGW(TAG, "Cannot select SD image widget=%s path=%s: %s", widget.name.c_str(), image.virtual_path.c_str(),
              storage_error_message(open_result.error));
     return false;
   }
@@ -476,30 +513,30 @@ bool CydSdHttpServer::select_image(size_t index) {
     }
   }
 
-  if (!this->active_lvgl_source_.empty())
-    lv_image_cache_drop(this->active_lvgl_source_.c_str());
+  if (!widget.active_lvgl_source.empty())
+    lv_image_cache_drop(widget.active_lvgl_source.c_str());
   if (cached != nullptr) {
     cached->last_used = ++this->cache_use_counter_;
-    ::lv_image_set_src(this->image_widget_, cached->source());
-    this->active_lvgl_source_.clear();
-    this->active_cached_image_ = cached;
+    ::lv_image_set_src(widget.widget, cached->source());
+    widget.active_lvgl_source.clear();
+    widget.active_cached_image = cached;
   } else {
-    this->active_lvgl_source_ = std::string(1, this->lvgl_drive_letter_) + ":" + image.virtual_path;
-    ::lv_image_set_src(this->image_widget_, this->active_lvgl_source_.c_str());
-    this->active_cached_image_ = nullptr;
+    widget.active_lvgl_source = std::string(1, this->lvgl_drive_letter_) + ":" + image.virtual_path;
+    ::lv_image_set_src(widget.widget, widget.active_lvgl_source.c_str());
+    widget.active_cached_image = nullptr;
   }
-  lv_obj_invalidate(this->image_widget_);
+  lv_obj_invalidate(widget.widget);
   this->evict_stale_cache_entries_(generation);
-  this->selected_image_index_ = index;
-  if (this->image_select_ != nullptr)
-    this->image_select_->publish_state(index);
+  widget.selected_image_index = image_index;
+  if (widget.image_select != nullptr)
+    widget.image_select->publish_state(image_index);
   if (cached != nullptr) {
-    ESP_LOGI(TAG, "Display image selected: %s (PSRAM cache %s, %u/%u bytes)", image.name.c_str(),
-             cache_hit ? "HIT" : "MISS", static_cast<unsigned>(this->decoded_image_cache_used_),
+    ESP_LOGI(TAG, "Display image selected: widget=%s image=%s (PSRAM cache %s, %u/%u bytes)", widget.name.c_str(),
+             image.name.c_str(), cache_hit ? "HIT" : "MISS", static_cast<unsigned>(this->decoded_image_cache_used_),
              static_cast<unsigned>(this->decoded_image_cache_size_));
   } else {
-    ESP_LOGI(TAG, "Display image selected: %s (%s, streaming fallback)", image.name.c_str(),
-             this->active_lvgl_source_.c_str());
+    ESP_LOGI(TAG, "Display image selected: widget=%s image=%s (%s, streaming fallback)", widget.name.c_str(),
+             image.name.c_str(), widget.active_lvgl_source.c_str());
   }
   return true;
 }

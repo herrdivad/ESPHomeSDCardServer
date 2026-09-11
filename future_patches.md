@@ -45,10 +45,11 @@ The first optimization stage is now implemented in the component and example:
 - a configurable LVGL per-file read cache, defaulting to 16 kB and capped at
   64 kB, reduces repeated FATFS/SDMMC reads during the first decode;
 - a dynamically allocated decoded RGB565 cache uses PSRAM only, defaults to a
-  hard 1 MB budget, and evicts inactive entries in least-recently-used order;
+  hard 1 MB budget, can be configured up to 4 MB, and evicts inactive entries
+  in least-recently-used order;
 - a 480 x 320 image uses 307,200 bytes, so the default budget can retain three
   full-screen frames without exceeding the configured limit;
-- the image currently assigned to the LVGL widget is never evicted underneath
+- an image currently assigned to an LVGL widget is never evicted underneath
   LVGL, and systems without PSRAM retain the original low-RAM `S:/` streaming
   fallback;
 - successful upload, overwrite, or deletion of a mapped image invalidates the
@@ -106,18 +107,18 @@ should still be measured across more formats and longer runs on the physical
 device; cache lifetime and fragmentation endurance remain open. Repository-side
 work remains limited to implementation, compilation, and host-side tests.
 
-## Priority 2 (Medium): Multiple Dynamic Image Widgets
+## Implemented in 0.4.0: Multiple Dynamic Image Widgets
 
-Extend `display_image` so one component instance can control an arbitrary
-number of LVGL image widgets by their YAML IDs. The initial implementation may
-share one compiled image name-to-SD-path allow-list across all configured
-widgets, avoiding duplicate mappings while preserving the existing path
-validation and cache behavior.
+One component instance can now control an arbitrary number of LVGL image
+widgets by their YAML IDs. The plural `display_images` configuration uses one
+compiled image name-to-SD-path allow-list and one decoded PSRAM cache across
+all configured widgets while preserving the existing path validation and
+storage synchronization.
 
-Each widget must nevertheless receive its own ESPHome Select entity and its
-own Home Assistant dropdown. Selecting an option for one widget must update
-only that widget and must not change the selected image or published state of
-any other widget. Conceptually, a future configuration could look like:
+Each widget may receive its own ESPHome Select entity and Home Assistant
+dropdown. Selecting an option updates only that widget and its published
+Select state. Omitting `select:` creates a static SD-backed widget without an
+unnecessary Home Assistant entity. The implemented configuration is:
 
 ```yaml
 cyd_sd_http_server:
@@ -142,18 +143,18 @@ cyd_sd_http_server:
           name: Secondary image
 ```
 
-The exact YAML schema may change during implementation; the required behavior
-is one shared mapping plus one independent runtime controller and Home
-Assistant Select entity per widget. Decoded PSRAM entries should be shared by
-SD path where possible, so two widgets displaying the same image do not require
-two identical full-frame buffers. Cache eviction must never free an entry still
-referenced by any widget.
+Every configured widget is initialized during component setup, so neither
+dynamic nor static widgets need an `on_boot` lambda. Decoded PSRAM entries are
+shared by normalized SD path: two widgets displaying the same image reference
+one allocation. Before LRU eviction, the component scans all widget bindings
+and never frees an entry still referenced by any widget. If all fitting entries
+are referenced, the new image uses the bounded `S:/` streaming fallback instead
+of exceeding the cache limit.
 
-This feature should make it possible to fill icons, photographs, status images,
-and other LVGL image elements dynamically at runtime through any number of Home
-Assistant dropdowns. The first version can keep the mapping static and compiled
-from YAML; directory scanning, arbitrary user paths, and automatic widget
-creation remain separate future enhancements.
+The former singular `display_image` configuration remains accepted as a
+backward-compatible one-widget form. Directory scanning, per-widget option
+subsets, arbitrary user paths, automatic widget creation, and an on-screen LVGL
+dropdown remain separate future enhancements.
 
 ## Priority 3: Remaining Media Work
 
@@ -253,7 +254,7 @@ Configure and manage LVGL with a strict, user-selected cache budget:
 
 - retain recently used decoded images only up to the configured hard limit;
 - evict inactive entries in least-recently-used order before exceeding it;
-- never free the descriptor currently assigned to the image widget;
+- never free a descriptor currently assigned to any image widget;
 - invalidate entries after mapped files are replaced or deleted;
 - close SD file handles after drawing or decoding completes;
 - release page-specific media when leaving a page;
@@ -294,8 +295,9 @@ The first milestone now contains:
 1. one shared and synchronized SD storage service;
 2. a read-only LVGL `S:` drive;
 3. JPEG and LVGL BIN image sources;
-4. one active image plus an optional, bounded PSRAM LRU cache;
-5. a static Home Assistant dropdown mapped to approved paths;
+4. multiple independently controlled image widgets plus one optional, bounded,
+   path-shared PSRAM LRU cache;
+5. optional independent Home Assistant dropdowns mapped to approved paths;
 6. unchanged browser upload and download support.
 
 PNG, automatic directory-backed dropdown options, an optional touchscreen

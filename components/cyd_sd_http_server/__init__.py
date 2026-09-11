@@ -24,6 +24,7 @@ CONF_DATA2_PIN = "data2_pin"
 CONF_DATA3_PIN = "data3_pin"
 CONF_FORMAT_IF_MOUNT_FAILED = "format_if_mount_failed"
 CONF_DISPLAY_IMAGE = "display_image"
+CONF_DISPLAY_IMAGES = "display_images"
 CONF_DRIVE_LETTER = "drive_letter"
 CONF_IMAGE_WIDGET = "image_widget"
 CONF_IMAGES = "images"
@@ -38,8 +39,9 @@ CONF_PORT = "port"
 CONF_SELECT = "select"
 CONF_STRATEGY = "strategy"
 CONF_URL_PREFIX = "url_prefix"
+CONF_WIDGETS = "widgets"
 
-MAX_DECODED_CACHE_SIZE = 1024 * 1024
+MAX_DECODED_CACHE_SIZE = 4 * 1024 * 1024
 MAX_FILE_BUFFER_SIZE = 64 * 1024
 
 cyd_ns = cg.esphome_ns.namespace("cyd_sd_http_server")
@@ -114,6 +116,26 @@ IMAGE_CACHE_SCHEMA = cv.Schema(
 )
 
 
+IMAGE_MAPPING_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_NAME): cv.string_strict,
+        cv.Required(CONF_PATH): _image_path,
+    }
+)
+
+
+DISPLAY_WIDGET_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_IMAGE_WIDGET): cv.All(
+            cv.use_id(lv_image_t), cv.requires_component("lvgl")
+        ),
+        cv.Optional(CONF_INITIAL_IMAGE): cv.string_strict,
+        cv.Optional(CONF_SELECT): select.select_schema(CydSdImageSelect),
+    }
+)
+
+
+# Backward-compatible single-widget schema used by version 0.2/0.3 YAML.
 DISPLAY_IMAGE_SCHEMA = cv.Schema(
     {
         cv.Required(CONF_IMAGE_WIDGET): cv.All(
@@ -121,14 +143,7 @@ DISPLAY_IMAGE_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_DRIVE_LETTER, default="S"): _drive_letter,
         cv.Required(CONF_IMAGES): cv.All(
-            cv.ensure_list(
-                cv.Schema(
-                    {
-                        cv.Required(CONF_NAME): cv.string_strict,
-                        cv.Required(CONF_PATH): _image_path,
-                    }
-                )
-            ),
+            cv.ensure_list(IMAGE_MAPPING_SCHEMA),
             cv.Length(min=1),
         ),
         cv.Optional(CONF_INITIAL_IMAGE): cv.string_strict,
@@ -138,23 +153,56 @@ DISPLAY_IMAGE_SCHEMA = cv.Schema(
 )
 
 
-def _validate_display_image(config):
-    display = config.get(CONF_DISPLAY_IMAGE)
-    if display is None:
+DISPLAY_IMAGES_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_DRIVE_LETTER, default="S"): _drive_letter,
+        cv.Required(CONF_IMAGES): cv.All(
+            cv.ensure_list(IMAGE_MAPPING_SCHEMA),
+            cv.Length(min=1),
+        ),
+        cv.Optional(CONF_CACHE, default={}): IMAGE_CACHE_SCHEMA,
+        cv.Required(CONF_WIDGETS): cv.All(
+            cv.ensure_list(DISPLAY_WIDGET_SCHEMA),
+            cv.Length(min=1),
+        ),
+    }
+)
+
+
+def _validate_display_images(config):
+    legacy = config.get(CONF_DISPLAY_IMAGE)
+    display = config.get(CONF_DISPLAY_IMAGES)
+    if legacy is not None and display is not None:
+        raise cv.Invalid("Use either display_image or display_images, not both")
+    if legacy is not None:
+        display = legacy
+        widgets = [legacy]
+        prefix = CONF_DISPLAY_IMAGE
+    elif display is not None:
+        widgets = display[CONF_WIDGETS]
+        prefix = CONF_DISPLAY_IMAGES
+    else:
         return config
 
     names = [entry[CONF_NAME] for entry in display[CONF_IMAGES]]
     paths = [entry[CONF_PATH] for entry in display[CONF_IMAGES]]
     if len(names) != len(set(names)):
-        raise cv.Invalid("display_image image names must be unique")
+        raise cv.Invalid(f"{prefix} image names must be unique")
     if len(paths) != len(set(paths)):
-        raise cv.Invalid("display_image image paths must be unique")
+        raise cv.Invalid(f"{prefix} image paths must be unique")
     if any(not name or len(name.encode("utf-8")) > 64 for name in names):
-        raise cv.Invalid("display_image names must contain 1 to 64 UTF-8 bytes")
-    if CONF_INITIAL_IMAGE not in display:
-        display[CONF_INITIAL_IMAGE] = names[0]
-    elif display[CONF_INITIAL_IMAGE] not in names:
-        raise cv.Invalid("initial_image must match one of the configured image names")
+        raise cv.Invalid(f"{prefix} names must contain 1 to 64 UTF-8 bytes")
+
+    widget_ids = [str(widget[CONF_IMAGE_WIDGET]) for widget in widgets]
+    if len(widget_ids) != len(set(widget_ids)):
+        raise cv.Invalid(f"{prefix} image_widget IDs must be unique")
+    for widget in widgets:
+        if CONF_INITIAL_IMAGE not in widget:
+            widget[CONF_INITIAL_IMAGE] = names[0]
+        elif widget[CONF_INITIAL_IMAGE] not in names:
+            raise cv.Invalid(
+                f"{prefix} widget initial_image must match one of the configured image names"
+            )
 
     # ESPHome 2026.8 uses LVGL 9.5. Its built-in Tiny JPEG decoder performs
     # incremental 8x8-tile decoding and registers itself when this define is on.
@@ -211,10 +259,11 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Required(CONF_API_KEY): _api_key,
             cv.Optional(CONF_DISPLAY_IMAGE): DISPLAY_IMAGE_SCHEMA,
+            cv.Optional(CONF_DISPLAY_IMAGES): DISPLAY_IMAGES_SCHEMA,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _validate_config,
-    _validate_display_image,
+    _validate_display_images,
     socket.consume_sockets(4, "cyd_sd_http_server"),
     socket.consume_sockets(
         1, "cyd_sd_http_server.control", socket.SocketType.UDP
@@ -246,10 +295,10 @@ async def to_code(config):
     cg.add(var.set_max_upload_size(config[CONF_MAX_UPLOAD_SIZE]))
     cg.add(var.set_api_key(config[CONF_API_KEY]))
 
-    if display := config.get(CONF_DISPLAY_IMAGE):
+    legacy_display = config.get(CONF_DISPLAY_IMAGE)
+    display = config.get(CONF_DISPLAY_IMAGES) or legacy_display
+    if display is not None:
         cg.add_define("USE_CYD_SD_LVGL")
-        image_widget = await cg.get_variable(display[CONF_IMAGE_WIDGET])
-        cg.add(var.set_image_widget(image_widget))
         cg.add(var.set_lvgl_drive_letter(display[CONF_DRIVE_LETTER]))
         cache = display[CONF_CACHE]
         cg.add(var.set_decoded_image_cache_size(cache[CONF_MAX_SIZE]))
@@ -258,13 +307,26 @@ async def to_code(config):
             cg.add(var.add_display_image(image[CONF_NAME], image[CONF_PATH]))
 
         names = [image[CONF_NAME] for image in display[CONF_IMAGES]]
-        initial_index = names.index(display[CONF_INITIAL_IMAGE])
-        cg.add(var.set_initial_image(initial_index))
+        widgets = [legacy_display] if legacy_display is not None else display[CONF_WIDGETS]
+        for widget_index, widget in enumerate(widgets):
+            image_widget = await cg.get_variable(widget[CONF_IMAGE_WIDGET])
+            initial_index = names.index(widget[CONF_INITIAL_IMAGE])
+            cg.add(
+                var.add_display_image_widget(
+                    image_widget,
+                    initial_index,
+                    str(widget[CONF_IMAGE_WIDGET]),
+                )
+            )
 
-        select_config = display[CONF_SELECT]
-        image_select = cg.new_Pvariable(select_config[CONF_ID], var)
-        await select.register_select(image_select, select_config, options=names)
-        cg.add(var.set_image_select(image_select))
+            if select_config := widget.get(CONF_SELECT):
+                image_select = cg.new_Pvariable(
+                    select_config[CONF_ID], var, widget_index
+                )
+                await select.register_select(
+                    image_select, select_config, options=names
+                )
+                cg.add(var.set_image_select(widget_index, image_select))
 
     # ESPHome excludes these native ESP-IDF components unless requested.
     esp32.include_builtin_idf_component("fatfs")
