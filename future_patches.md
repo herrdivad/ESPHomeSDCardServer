@@ -1,5 +1,86 @@
 # Future Patches
 
+## Planned Next: Directory and Wildcard Image Sources with a Home Assistant Refresh Button
+
+**Status (2026-09-13): planned for near-term implementation; awaiting the
+maintainer's explicit GO. This entry authorizes planning only, not component
+implementation.**
+
+### Goal and compatibility
+
+Extend the shared image library with optional SD directory and wildcard sources.
+New matching files must become selectable without editing YAML, rebuilding, or
+flashing firmware after the feature has been configured and deployed.
+
+All code requests are additions by default, as recorded in `AGENTS.md`. Preserve
+all existing features, supported YAML configurations, interfaces, and behavior
+unless the maintainer explicitly requests replacement or removal. In particular,
+retain explicit `images` name/path mappings, `initial_image`, both `display_images`
+and legacy `display_image`, independent per-widget Selects, static widgets without
+Selects, shared PSRAM caching, streaming fallback, and all existing HTTP/browser
+file operations. Existing configurations must not require migration.
+
+### Required Home Assistant interaction
+
+- Provide a configurable ESPHome Button entity exposed in the Home Assistant GUI,
+  with a user-facing name such as `Bilderliste aktualisieren`.
+- Pressing this button rescans the configured directories and wildcard sources,
+  adds newly discovered compatible images to the shared library, and updates the
+  options of all configured image Selects in Home Assistant.
+- Keep the existing widget, Select, and Button entity identities stable. Refresh
+  must not create a separate entity or LVGL widget for each discovered file.
+- Uploading a file followed by pressing the button must be sufficient to make it
+  selectable; no device restart or firmware rebuild is required.
+- The button refreshes the library; it must not automatically switch a widget to
+  a newly discovered image. Preserve current selections by stable identity rather
+  than by an index that can change when the list is updated.
+
+### Proposed implementation design
+
+1. Add optional YAML source definitions alongside the existing explicit mappings:
+   a directory, simple filename patterns such as `*.jpg` or `logo*.bin`, and an
+   optional recursive scan setting, disabled by default. Specify exact wildcard
+   semantics and configuration keys during implementation; this is not yet valid
+   component syntax. Retain support for `.jpg`, `.jpeg`, and LVGL `.bin`.
+2. Discover files on the device through the synchronized `SdStorage` service.
+   Propose an initial scan after mounting the SD card, with subsequent refreshes
+   triggered by the required HA button. Keep scan work and result storage bounded
+   so large directories do not monopolize the display loop or exhaust memory.
+3. Build concrete name/path entries from matching files. Use the normalized full
+   SD path as a stable internal identity, deduplicate overlapping sources, and
+   give existing explicit mappings precedence for their configured paths and
+   names. Resolve duplicate filenames and display-name collisions deterministically.
+4. Keep YAML IDs compile-time declarations: `image_widget`, the Select entity,
+   and the compiled placeholder retain their existing IDs. Discovered SD images
+   are runtime library entries, not dynamically generated ESPHome `id(...)`
+   objects. Runtime lookup uses a stable path/name mapping. Existing explicit
+   `initial_image` assignments must keep working; define an additive way to refer
+   to a discovered startup image if needed.
+5. Publish refreshed Select options and update internal bindings safely in the
+   appropriate execution context. Handle repeated button presses without
+   overlapping scans, and preserve the last usable library on scan failure.
+   Define behavior for empty sources, missing directories, removed files, and
+   an active image disappearing without silently selecting a different image.
+6. Apply centralized path validation and reserved temporary/backup-name protection
+   to every discovered file. Preserve upload/read conflict handling, cache
+   invalidation on replacement/deletion, PSRAM-only decoded caches, cache budgets,
+   and the lifetime of any image still referenced by LVGL.
+
+### Acceptance and verification after GO
+
+- Existing explicit-only YAML and the legacy form continue to validate and behave
+  as before, including startup images and widgets with or without Selects.
+- A matching image uploaded into an allowed directory appears in all relevant HA
+  Selects after pressing the refresh button; unrelated and unsupported files do not.
+- Overlapping patterns, duplicate names, repeated refreshes, list reordering,
+  empty/missing directories, removed active files, and scan failures have defined,
+  tested behavior without corrupting widget assignments or losing explicit mappings.
+- Host checks cover matching, validation, merging, and selection stability. Run
+  YAML validation, code generation, and a full firmware build for the pinned target.
+- Verify the HA button, updated dropdowns, display/cache behavior, and concurrent
+  HTTP file operations on an explicitly intended physical device; record hardware
+  results separately from host/build checks.
+
 ## Implemented in 0.2.0: Direct SD Images and Home Assistant Selection
 
 The recommended initial image milestone below is now implemented:
@@ -264,6 +345,13 @@ This policy cannot remove the global LVGL display buffer or all decoder work
 memory, but it should prevent multiple full images from accumulating in RAM.
 
 ### Phase 7: Audio Streaming
+
+The detailed working plan is [Optional SD MP3 Playback](PlayMP3AudioPlan.md)
+(reviewed 2026-09-17). It records the confirmed use of the FNK0104S's existing
+audio connector, hardware and ESPHome findings, streaming memory estimates,
+the proposed HA Select/media-player integration, implementation steps, effort,
+and acceptance criteria for human contributors and AI agents. This remains
+planning only; audio implementation and hardware validation are still pending.
 
 Audio is a separate consumer of the same shared storage service and is not part
 of the LVGL file-system driver. Add a streaming pipeline that reads small SD
