@@ -2,7 +2,8 @@
 
 This document explains how the optional `display_images` configuration connects
 one shared static YAML mapping to multiple live LVGL image widgets and optional,
-independent Home Assistant dropdowns. It applies to the FNK0104S example and
+independent Home Assistant dropdowns or hidden Selects with text status and API
+actions. It applies to the FNK0104S example and
 ESPHome 2026.8.x. The former single-widget `display_image` form remains
 supported for backward compatibility.
 
@@ -215,11 +216,60 @@ an arbitrary SD path. The firmware translates that option through the compiled
 mapping, which prevents a dropdown value from accessing `../`, temporary upload
 files, or an unapproved media file.
 
-Every `widgets` entry containing `select:` creates its own dropdown in Home
+Every `widgets` entry containing a visible `select:` creates its own dropdown in Home
 Assistant through the ESPHome API. Their states are independent even though
 their options come from the same mapping. Entries without `select:` create no
 HA entity. These are not currently on-screen LVGL dropdowns; adding touchscreen
 controls is a separate enhancement.
+
+### Hidden Select flow
+
+With `select.hidden: true`, the same `CydSdImageSelect` stays internal. A generated
+`text_sensor::TextSensor` supplies the read-only HA `sensor.*` state, and a native
+API action named `cyd_sd_set_<image_widget_id>` accepts one string, `option`.
+Action names use lowercase widget IDs; conflicting names and generated sensor IDs
+are rejected during configuration validation. This also works with the legacy
+`display_image` form. Other widgets may remain static or use visible Selects.
+
+```mermaid
+sequenceDiagram
+    participant HA as HA automation
+    participant API as Widget API action
+    participant Select as Internal CydSdImageSelect
+    participant Server as Existing image controller
+    participant Status as Text status sensor
+    HA->>API: option: Bild 2
+    API->>Select: SelectCall with allow-listed name
+    Select->>Server: select_image(widget, image index)
+    alt Source assignment succeeds
+        Server->>Select: publish_image_state(index)
+        Select->>Status: Publish image name
+        Select->>Select: Publish internal state and run callbacks
+        Status-->>HA: Confirmed source name
+    else Unknown name or detected storage failure
+        Note over API,Status: Keep prior state; log rejection
+    end
+```
+
+The adapter implementation is in `image_select.cpp`. Its action is registered
+once during server setup, even if the card is unavailable. API disconnections
+do not register additional actions. Code generation enables the required API
+service support only for hidden mode; no manual `api.actions` block is required.
+Existing user-defined API actions continue to coexist with the generated ones.
+
+The status is published before local Select callbacks, because a synchronous
+`on_value` callback may select a different image. No status is published for an
+initial image that cannot be assigned. On reboot, `initial_image` is applied
+again; HA can reevaluate its automation when the device becomes available.
+The API action does not return a success/error response. A published name confirms
+source assignment; streaming may discover damaged image data later during drawing.
+
+The generated sensor inherits presentation metadata but not Select callbacks or
+MQTT command topics. The internal Select preserves its YAML ID and local actions.
+Switching modes changes the HA entity domain; migrate existing Select automations
+to the generated action and clean up stale HA entities if necessary. See the
+[README usage instructions](../README.md#hidden-image-selects-text-status-and-ha-automations)
+and [mixed-mode example](../examples/fnk0104s-hidden-images.yaml).
 
 ## Cache behavior
 

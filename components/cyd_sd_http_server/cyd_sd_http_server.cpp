@@ -127,6 +127,12 @@ bool send_all(httpd_req_t *request, const char *data, size_t length, uint64_t *p
 
 void CydSdHttpServer::setup() {
   this->stop_requested_ = false;
+#ifdef USE_CYD_SD_HIDDEN_SELECT
+  for (const auto &widget : this->display_image_widgets_) {
+    if (widget.image_select != nullptr)
+      widget.image_select->register_hidden_action();
+  }
+#endif
   this->storage_.configure(this->mount_point_, this->format_if_mount_failed_, this->internal_pullups_, this->bus_width_,
                            this->clk_pin_, this->cmd_pin_, this->data0_pin_, this->data1_pin_, this->data2_pin_,
                            this->data3_pin_);
@@ -188,8 +194,12 @@ void CydSdHttpServer::dump_config() {
     const char *selected = widget.selected_image_index < this->display_images_.size()
                                ? this->display_images_[widget.selected_image_index].name.c_str()
                                : "<invalid>";
-    ESP_LOGCONFIG(TAG, "    %s: %s (%s)", widget.name.c_str(), selected,
-                  widget.image_select != nullptr ? "Home Assistant Select" : "static");
+    const char *mode = widget.image_select != nullptr ? "Home Assistant Select" : "static";
+#ifdef USE_CYD_SD_HIDDEN_SELECT
+    if (widget.image_select != nullptr && widget.image_select->is_hidden())
+      mode = "text status with API action";
+#endif
+    ESP_LOGCONFIG(TAG, "    %s: %s (%s)", widget.name.c_str(), selected, mode);
   }
 #endif
 }
@@ -207,12 +217,6 @@ bool CydSdHttpServer::teardown() {
 CydSdHttpServer::CachedImage::~CachedImage() {
   if (this->data != nullptr)
     heap_caps_free(this->data);
-}
-
-void CydSdImageSelect::control(size_t index) {
-  if (!this->parent_->select_image(this->widget_index_, index))
-    ESP_LOGW(TAG, "Display image selection widget=%u image=%u failed", static_cast<unsigned>(this->widget_index_),
-             static_cast<unsigned>(index));
 }
 
 void CydSdHttpServer::add_display_image_widget(lv_obj_t *widget, size_t initial_image_index,
@@ -529,7 +533,7 @@ bool CydSdHttpServer::select_image(size_t widget_index, size_t image_index) {
   this->evict_stale_cache_entries_(generation);
   widget.selected_image_index = image_index;
   if (widget.image_select != nullptr)
-    widget.image_select->publish_state(image_index);
+    widget.image_select->publish_image_state(image_index);
   if (cached != nullptr) {
     ESP_LOGI(TAG, "Display image selected: widget=%s image=%s (PSRAM cache %s, %u/%u bytes)", widget.name.c_str(),
              image.name.c_str(), cache_hit ? "HIT" : "MISS", static_cast<unsigned>(this->decoded_image_cache_used_),

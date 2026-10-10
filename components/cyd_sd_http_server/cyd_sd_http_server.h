@@ -16,6 +16,11 @@
 #include <lvgl.h>
 #endif
 
+#ifdef USE_CYD_SD_HIDDEN_SELECT
+#include "esphome/components/api/custom_api_device.h"
+#include "esphome/components/text_sensor/text_sensor.h"
+#endif
+
 namespace esphome {
 namespace cyd_sd_http_server {
 
@@ -189,15 +194,34 @@ class CydSdHttpServer : public Component {
 };
 
 #ifdef USE_CYD_SD_LVGL
-class CydSdImageSelect : public select::Select {
+class CydSdImageSelect : public select::Select
+#ifdef USE_CYD_SD_HIDDEN_SELECT
+                       , public api::CustomAPIDevice
+#endif
+{
  public:
   CydSdImageSelect(CydSdHttpServer *parent, size_t widget_index)
       : parent_(parent), widget_index_(widget_index) {}
+  void publish_image_state(size_t index);
+#ifdef USE_CYD_SD_HIDDEN_SELECT
+  void set_hidden_status(text_sensor::TextSensor *status, const std::string &action_name) {
+    this->image_status_ = status;
+    this->action_name_ = action_name;
+  }
+  void register_hidden_action();
+  bool is_hidden() const { return this->image_status_ != nullptr; }
+#endif
 
  protected:
   void control(size_t index) override;
   CydSdHttpServer *parent_;
   size_t widget_index_;
+#ifdef USE_CYD_SD_HIDDEN_SELECT
+  void select_option_(std::string option);
+  text_sensor::TextSensor *image_status_{nullptr};
+  std::string action_name_;
+  bool action_registered_{false};
+#endif
 };
 #endif
 

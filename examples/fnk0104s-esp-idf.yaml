@@ -97,6 +97,8 @@ cyd_sd_http_server:
         select:
           id: sd_display_image_select
           name: Display image
+          # Set hidden: true for read-only HA text status and an image action.
+          # The default remains a visible dropdown; api: is required when hidden.
       # Static widgets: initialized and cached by the component, but do not
       # create unnecessary Home Assistant entities because select is omitted.
       - image_widget: logo_1

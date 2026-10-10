@@ -1,6 +1,14 @@
 # Plan: Bildsteuerung mit verstecktem Select
 
-Stand: 2026-10-09. **Planung, noch nicht implementiert.**
+Stand: 2026-10-09. **Historical design plan; implementation now available.**
+
+The implemented configuration and migration instructions are documented in the
+[README](../README.md#hidden-image-selects-text-status-and-ha-automations).
+The design below records the original proposal. The status pointer is held by
+`CydSdImageSelect` rather than the widget binding, and its implementation lives
+in `image_select.cpp`. The maintainer reported a successful physical-device test
+of the hidden image Select and HA image action on 2026-10-10; remaining checks
+are tracked in [the hardware test matrix](HARDWARE_TEST_MATRIX.md).
 
 Ziel ist eine dritte, pro LVGL-Bild-Widget wählbare Betriebsart. Der Nutzer
 konfiguriert weiterhin `select:` mit einer zusätzlichen booleschen Option

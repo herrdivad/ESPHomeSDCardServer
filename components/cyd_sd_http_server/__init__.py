@@ -2,14 +2,26 @@
 
 import esphome.codegen as cg
 from esphome import pins
-from esphome.components import esp32, select, socket
+from esphome.components import esp32, select, socket, text_sensor
 from esphome.components.lvgl import defines as lvgl_defines
 from esphome.components.lvgl.types import lv_image_t
 import esphome.config_validation as cv
-from esphome.const import CONF_ID, CONF_NAME, CONF_PATH, Framework
+import esphome.final_validate as fv
+from esphome.const import (
+    CONF_DEVICE_ID,
+    CONF_DISABLED_BY_DEFAULT,
+    CONF_ENTITY_CATEGORY,
+    CONF_ICON,
+    CONF_ID,
+    CONF_INTERNAL,
+    CONF_MQTT_ID,
+    CONF_NAME,
+    CONF_PATH,
+    CONF_WEB_SERVER,
+    Framework,
+)
 
 DEPENDENCIES = ["esp32"]
-AUTO_LOAD = ["network", "select", "socket"]
 CODEOWNERS = []
 
 CONF_API_KEY = "api_key"
@@ -40,6 +52,8 @@ CONF_SELECT = "select"
 CONF_STRATEGY = "strategy"
 CONF_URL_PREFIX = "url_prefix"
 CONF_WIDGETS = "widgets"
+CONF_HIDDEN = "hidden"
+CONF_IMAGE_STATUS = "image_status"
 
 MAX_DECODED_CACHE_SIZE = 4 * 1024 * 1024
 MAX_FILE_BUFFER_SIZE = 64 * 1024
@@ -47,6 +61,41 @@ MAX_FILE_BUFFER_SIZE = 64 * 1024
 cyd_ns = cg.esphome_ns.namespace("cyd_sd_http_server")
 CydSdHttpServer = cyd_ns.class_("CydSdHttpServer", cg.Component)
 CydSdImageSelect = cyd_ns.class_("CydSdImageSelect", select.Select)
+
+
+def _display_widgets(config):
+    if display := config.get(CONF_DISPLAY_IMAGES):
+        if not isinstance(display, dict):
+            return []
+        widgets = display.get(CONF_WIDGETS, [])
+        return widgets if isinstance(widgets, list) else [widgets]
+    if legacy := config.get(CONF_DISPLAY_IMAGE):
+        return [legacy]
+    return []
+
+
+def AUTO_LOAD(config):
+    components = ["network", "select", "socket"]
+    # AUTO_LOAD runs before schema validation, including ensure_list conversion.
+    for widget in _display_widgets(config):
+        if not isinstance(widget, dict):
+            continue
+        selection = widget.get(CONF_SELECT)
+        if not isinstance(selection, dict):
+            continue
+        try:
+            hidden = cv.boolean(selection.get(CONF_HIDDEN, False))
+        except cv.Invalid:
+            # Report malformed values through the normal schema error path.
+            continue
+        if hidden:
+            components.append("text_sensor")
+            break
+    return components
+
+
+def _hidden_action_name(widget):
+    return f"cyd_sd_set_{widget[CONF_IMAGE_WIDGET]}".lower()
 
 
 def _api_key(value):
@@ -124,13 +173,18 @@ IMAGE_MAPPING_SCHEMA = cv.Schema(
 )
 
 
+IMAGE_SELECT_SCHEMA = select.select_schema(CydSdImageSelect).extend(
+    {cv.Optional(CONF_HIDDEN, default=False): cv.boolean}
+)
+
+
 DISPLAY_WIDGET_SCHEMA = cv.Schema(
     {
         cv.Required(CONF_IMAGE_WIDGET): cv.All(
             cv.use_id(lv_image_t), cv.requires_component("lvgl")
         ),
         cv.Optional(CONF_INITIAL_IMAGE): cv.string_strict,
-        cv.Optional(CONF_SELECT): select.select_schema(CydSdImageSelect),
+        cv.Optional(CONF_SELECT): IMAGE_SELECT_SCHEMA,
     }
 )
 
@@ -148,7 +202,7 @@ DISPLAY_IMAGE_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_INITIAL_IMAGE): cv.string_strict,
         cv.Optional(CONF_CACHE, default={}): IMAGE_CACHE_SCHEMA,
-        cv.Required(CONF_SELECT): select.select_schema(CydSdImageSelect),
+        cv.Required(CONF_SELECT): IMAGE_SELECT_SCHEMA,
     }
 )
 
@@ -203,12 +257,49 @@ def _validate_display_images(config):
             raise cv.Invalid(
                 f"{prefix} widget initial_image must match one of the configured image names"
             )
+        selection = widget.get(CONF_SELECT, {})
+        if selection.get(CONF_HIDDEN):
+            cv.requires_component("api")(True)
+            # Preserve presentation metadata, but not Select callbacks or MQTT commands.
+            status = {
+                key: selection[key]
+                for key in (
+                    CONF_NAME, CONF_ICON, CONF_ENTITY_CATEGORY,
+                    CONF_DISABLED_BY_DEFAULT, CONF_DEVICE_ID, CONF_WEB_SERVER,
+                )
+                if key in selection
+            }
+            status[CONF_ID] = f"cyd_sd_{widget[CONF_IMAGE_WIDGET]}_image_status"
+            status[CONF_INTERNAL] = False
+            widget[CONF_IMAGE_STATUS] = text_sensor.text_sensor_schema()(status)
+            selection[CONF_INTERNAL] = True
+            selection.pop(CONF_MQTT_ID, None)
 
     # ESPHome 2026.8 uses LVGL 9.5. Its built-in Tiny JPEG decoder performs
     # incremental 8x8-tile decoding and registers itself when this define is on.
     lvgl_defines.add_lv_use("tjpgd")
     lvgl_defines.add_lv_use("image")
     return config
+
+
+def _final_validate_hidden_actions(config):
+    full_config = fv.full_config.get()
+    api_config = full_config.get("api", {})
+    action_names = {
+        action["action"] for action in api_config.get("actions", [])
+    }
+    for widget in _display_widgets(config):
+        if widget.get(CONF_SELECT, {}).get(CONF_HIDDEN):
+            name = _hidden_action_name(widget)
+            if name in action_names:
+                raise cv.Invalid(f"Hidden image action name conflicts with another action: {name}")
+            action_names.add(name)
+            # API source filtering also reads this flag; defines alone omit user_services.cpp.
+            api_config["custom_services"] = True
+    return config
+
+
+FINAL_VALIDATE_SCHEMA = _final_validate_hidden_actions
 
 
 def _validate_config(config):
@@ -327,6 +418,12 @@ async def to_code(config):
                     image_select, select_config, options=names
                 )
                 cg.add(var.set_image_select(widget_index, image_select))
+                if select_config[CONF_HIDDEN]:
+                    cg.add_define("USE_CYD_SD_HIDDEN_SELECT")
+                    cg.add_define("USE_API_USER_DEFINED_ACTIONS")
+                    cg.add_define("USE_API_CUSTOM_SERVICES")
+                    status = await text_sensor.new_text_sensor(widget[CONF_IMAGE_STATUS])
+                    cg.add(image_select.set_hidden_status(status, _hidden_action_name(widget)))
 
     # ESPHome excludes these native ESP-IDF components unless requested.
     esp32.include_builtin_idf_component("fatfs")

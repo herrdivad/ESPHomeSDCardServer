@@ -19,7 +19,7 @@
 # CYD SD HTTP Server for ESPHome
 
 - **Manage your SD card in the browser** — dedicated web server for uploads, downloads, folders, and deletion, alongside ESPHome and OTA.
-- **Bring SD images to your dashboard** — static LVGL widgets or dynamic images with independent Home Assistant dropdowns.
+- **Bring SD images to your dashboard** — static LVGL widgets, Home Assistant dropdowns, or text status with automation actions.
 - **Cache on demand, stream when needed** — dynamically allocated PSRAM image cache with direct SD-streaming fallback.
 - **One image library, shared memory** — one YAML allow-list for all widgets; the same cached image uses one pixel buffer across multiple widgets.
 - **Prepare and transfer with helper tools** — host-side LVGL BIN conversion and streaming Python uploads with optional SHA-256 verification.
@@ -43,6 +43,11 @@ Basic functional tests have already been performed by the maintainer on real
 FNK0104S hardware. Image display, RAM/PSRAM usage, Home Assistant Selects, and
 the web file manager's upload, download, folder, and delete operations work
 reliably in those tests.
+
+The maintainer also reported successful physical-device operation of the hidden
+image Select, its HA text status, and image switching through the HA action on
+2026-10-10. Reconnect, migration, and endurance scenarios remain open in the
+hardware matrix.
 
 Still pending are systematic tests of failures and recovery, simultaneous
 access by multiple clients, operator mistakes, power interruptions, and SD-card
@@ -87,7 +92,8 @@ comparative performance benchmark against the original project is claimed.
   allocated PSRAM LRU cache for decoded RGB565 frames (1 MB default, up to
   4 MB)
 - one shared YAML name-to-path allow-list for any number of LVGL image widgets;
-  each widget can optionally expose its own independent Home Assistant Select
+  each widget can optionally expose its own independent Home Assistant Select,
+  or a read-only text status with an image-selection action
 - streaming Python uploader and an explicit real-device smoke-test script
 
 ## Do's and don'ts
@@ -323,6 +329,78 @@ Here, `sd_display_image` exposes a Home Assistant dropdown and `logo_1` loads an
 initial image without creating a Select entity. All Selects offer the shared
 image list; prepare assets for the dimensions of the widgets that will use them.
 
+### Hidden image Selects: text status and HA automations
+
+Add `hidden: true` inside a widget's existing `select:` block to expose its
+current image name as a read-only Home Assistant sensor instead of a dropdown:
+
+```yaml
+      - image_widget: sd_display_image
+        initial_image: Bild 1
+        select:
+          id: sd_display_image_select
+          name: Display image
+          hidden: true
+```
+
+The three modes can coexist on one device:
+
+| Widget configuration | Home Assistant interface |
+| --- | --- |
+| No `select:` | No entity; static startup image |
+| `select:` with omitted `hidden` or `hidden: false` | Existing image dropdown |
+| `select:` with `hidden: true` | Read-only `sensor.*` and an image-selection action |
+
+The hidden mode requires the normal ESPHome `api:` component. No additional
+`text_sensor:`, `api.actions:`, `custom_services: true`, or lambda is needed.
+The original Select ID remains available to local ESPHome automations, including
+`select.set` and `on_value`. Its HA/MQTT Select interface is not exposed. The
+generated text sensor inherits the name, icon, entity category,
+`disabled_by_default`, sub-device assignment, and web-server sorting settings.
+`internal` on the Select does not hide this status sensor: hidden mode always
+keeps the Select internal and the status external. For an ID-only Select, the
+ID supplies its status name, following ESPHome's normal name default.
+
+For each hidden widget, the component registers
+`cyd_sd_set_<image_widget_id>` (lowercase). HA prefixes this with the device name.
+For the standard example, an automation's action is:
+
+```yaml
+action: esphome.fnk0104s_sd_server_cyd_sd_set_sd_display_image
+data:
+  option: Bild 2
+```
+
+In HA's automation editor, select **Perform action**, choose the device's
+`cyd_sd_set_...` action, and enter an exact name from `display_images.images`
+in the `option` field. Use time, temperature, or light triggers and conditions
+as usual. The action field is text; it does not provide a dropdown of images.
+Actions remain callable manually and from scripts, so this is a presentation
+mode rather than an access restriction.
+
+For example, a time automation can switch at sunset. A temperature automation
+can select one image above 25 °C and another below 23 °C, using separate
+thresholds to avoid frequent toggling. On restart, the device loads
+`initial_image`; add an HA availability/start trigger if the automation should
+immediately restore an image based on current conditions.
+
+Only allow-listed names are accepted. Unknown names and detected file-access
+failures keep the previous image and status. Failed initial loading leaves the
+sensor without a confirmed state. The status confirms a successful source
+assignment, not completion of a later streaming decode. The API action has no
+result response; check the text status and device logs when diagnosing failures.
+Reselecting the same name still reloads a replaced file as before.
+
+Switching an existing widget to hidden mode changes its HA domain from
+`select.*` to `sensor.*`. Update its existing `select.select_option` automations
+to use the new action; HA may retain an unavailable old entity that needs manual
+removal. Switching back restores the Select interface and removes the generated
+status/action from firmware. Both transitions require rebuilding and flashing.
+
+See [the mixed-mode example](examples/fnk0104s-hidden-images.yaml) for a visible
+image Select, a hidden logo Select, and three static logos on the same device.
+The legacy singular `display_image` configuration also accepts `select.hidden`.
+
 ### Image provisioning and rebuild requirements
 
 The current architecture fixes the `display_images.images` allow-list (image
@@ -366,6 +444,8 @@ widget's `initial_image`, so direct SD widgets do not require an `on_boot`
 lambda.
 
 A widget with `select:` creates its own independent ESPHome Select entity.
+With `hidden: true`, it instead exposes the text status and action described above.
+For the default visible mode,
 Home Assistant discovers each entity through the normal ESPHome API and shows
 the shared image names as dropdown options. Selecting an option changes only
 that widget and publishes only that Select's state. A widget without `select:`

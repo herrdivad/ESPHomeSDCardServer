@@ -1,8 +1,9 @@
 # Hardware test matrix
 
 No physical-device tests were run from this repository environment. Rows marked
-as passed are based on logs supplied from the user's FNK0104S; all other rows
-remain open until they are executed on the target hardware and recorded.
+as passed are based on logs or explicit test results supplied by the maintainer
+for their FNK0104S; all other rows remain open until they are executed on the
+target hardware and recorded.
 
 | Test | Status |
 |---|---|
@@ -25,6 +26,10 @@ remain open until they are executed on the target hardware and recorded.
 | Two widgets sharing one path use one decoded PSRAM allocation | Not run |
 | Independent widget Select entities update only their own widget/state | Not run |
 | Static widget without `select` creates no Home Assistant entity | Not run |
+| Hidden Select exposes text status and a working HA image action on the display | Passed: maintainer reported successful physical-device test on 2026-10-10 |
+| Mixed visible/hidden/static widgets preserve independent states on the display | Not run |
+| Hidden image status/action survives HA reconnect without duplicate registration | Not run |
+| Switching hidden mode on/off migrates HA entities and actions as documented | Not run |
 | Cache eviction never frees an entry referenced by any widget | Not run |
 | Fourth full-screen image evicts the least recently used inactive entry | Not run |
 | Decoded cache remains at or below the configured 1 MB limit | Not run |

@@ -1,0 +1,210 @@
+# Alternative example with visible, hidden, and static image widgets.
+esphome:
+  name: fnk0104s-hidden-images
+  friendly_name: FNK0104S SD Server
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    advanced:
+      # LVGL's Tiny JPEG decoder needs a 4 KiB temporary stack buffer while
+      # rendering a direct S:/ image. 8 KiB is too small once LVGL, FATFS and
+      # the SDMMC call chain are below it.
+      loop_task_stack_size: 16384
+      include_builtin_idf_components:
+        - fatfs
+      disable_vfs_support_termios: false
+      disable_vfs_support_select: false
+      disable_vfs_support_dir: false
+    sdkconfig_options:
+      # Keep FAT32 long file names (up to 255 characters) working. FatFS uses
+      # a temporary LFN buffer on the calling task stack, covered by the 16 KiB
+      # loop-task stack configured above.
+      CONFIG_FATFS_LFN_STACK: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+web_server:
+  port: 80
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+
+cyd_sd_http_server:
+  id: cyd_sd_server
+  port: 8080
+  control_port: 32769
+  mount_point: /sdcard
+  format_if_mount_failed: false
+  internal_pullups: true
+  bus_width: 4
+  clk_pin: GPIO38
+  cmd_pin: GPIO40
+  data0_pin: GPIO39
+  data1_pin: GPIO41
+  data2_pin: GPIO48
+  data3_pin: GPIO47
+  max_upload_size: 200MB
+  api_key: !secret sd_server_api_key
+
+  # Optional direct SD-to-LVGL image access. All widgets share one allow-list
+  # and PSRAM cache. A widget with select creates its own Home Assistant
+  # dropdown; omit select for a static SD-backed widget.
+  display_images:
+    drive_letter: S
+    # Decoded RGB565 frames are allocated only in PSRAM and retained with LRU
+    # eviction. 1 MB holds three 480x320 frames (307,200 bytes each). The
+    # smaller per-file buffer reduces repeated FATFS seeks on the first load.
+    cache:
+      max_size: 1MB
+      file_buffer_size: 16kB
+      memory: psram
+      strategy: lru
+    images:
+      - name: Bild 1
+        path: /Bild1.jpg
+      - name: Bild 2
+        path: /images/Bild2.jpg
+      # Four prepared 160x240 RGB565 BIN files for the portrait 2x2 logo page.
+      - name: Logo 1
+        path: /icons/logo1.bin
+      - name: Logo 2
+        path: /icons/logo2.bin
+      - name: Logo 3
+        path: /icons/logo3.bin
+      - name: Logo 4
+        path: /icons/logo4.bin
+    widgets:
+      # Dynamic widget: gets its own Select entity in Home Assistant.
+      - image_widget: sd_display_image
+        initial_image: Bild 1
+        select:
+          id: sd_display_image_select
+          name: Display image
+      # Hidden Select: HA exposes a read-only text status and the action
+      # esphome.fnk0104s_hidden_images_cyd_sd_set_logo_1 with an option field.
+      - image_widget: logo_1
+        initial_image: Logo 1
+        select:
+          id: logo_1_select
+          name: Logo image
+          hidden: true
+      # Static widgets create no Home Assistant entity.
+      - image_widget: logo_2
+        initial_image: Logo 2
+      - image_widget: logo_3
+        initial_image: Logo 3
+      - image_widget: logo_4
+        initial_image: Logo 4
+
+# Display bus of the FNK0104S.
+spi:
+  id: lcd_spi
+  clk_pin: GPIO12
+  mosi_pin: GPIO11
+
+display:
+  - platform: mipi_spi
+    id: cyd_display
+    spi_id: lcd_spi
+    model: ST7796
+    cs_pin: GPIO10
+    dc_pin: GPIO46
+    dimensions: 320x480
+    data_rate: 40MHz
+    color_order: bgr
+    invert_colors: true
+    color_depth: 16
+    update_interval: never
+    auto_clear_enabled: false
+
+# ESPHome currently requires an initial image ID when declaring an LVGL image
+# widget. This one-pixel asset is replaced by the selected S:/ file during
+# setup and does not allocate a full-screen runtime image buffer.
+image:
+  - platform: file
+    file: assets/sd-image-placeholder.svg
+    id: sd_image_placeholder
+    type: RGB565
+    resize: 1x1
+
+lvgl:
+  displays:
+    - cyd_display
+  buffer_size: 25%
+  pages:
+    - id: image_page
+      bg_color: 0x000000
+      widgets:
+        - image:
+            id: sd_display_image
+            src: sd_image_placeholder
+            # The selected SD image is drawn inside this widget. Match its size
+            # to the prepared image to avoid scaling/cropping surprises.
+            x: 0
+            y: 0
+            width: 320
+            height: 480
+    # Four SD-backed images without an on_boot lambda. At 160x240 RGB565, all
+    # four decoded frames together use 307,200 bytes of the shared PSRAM cache.
+    - id: logo_page
+      bg_color: 0x000000
+      widgets:
+        - image:
+            id: logo_1
+            src: sd_image_placeholder
+            x: 0
+            y: 0
+            width: 160
+            height: 240
+        - image:
+            id: logo_2
+            src: sd_image_placeholder
+            x: 160
+            y: 0
+            width: 160
+            height: 240
+        - image:
+            id: logo_3
+            src: sd_image_placeholder
+            x: 0
+            y: 240
+            width: 160
+            height: 240
+        - image:
+            id: logo_4
+            src: sd_image_placeholder
+            x: 160
+            y: 240
+            width: 160
+            height: 240
+
+output:
+  - platform: ledc
+    id: backlight_pwm
+    pin: GPIO45
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    id: display_backlight
+    name: Touchscreen Backlight
+    output: backlight_pwm
+    restore_mode: ALWAYS_ON
