@@ -3,6 +3,12 @@
 
 struct lv_obj_t {};
 struct lv_image_dsc_t {};
+enum lv_image_align_t {
+  LV_IMAGE_ALIGN_DEFAULT,
+  LV_IMAGE_ALIGN_STRETCH,
+  LV_IMAGE_ALIGN_CONTAIN,
+  LV_IMAGE_ALIGN_COVER,
+};
 struct lv_area_t {};
 struct lv_draw_buf_t {};
 struct lv_fs_drv_t {};

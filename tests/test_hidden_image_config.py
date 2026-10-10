@@ -115,6 +115,39 @@ class HiddenImageConfigTest(unittest.TestCase):
         self.run_config(generate=True)
         self.assertTrue((self.directory / "build/src/esphome/components/api/user_services.cpp").is_file())
 
+    def test_widget_fit_modes_are_generated_independently(self):
+        widgets = self.config["cyd_sd_http_server"]["display_images"]["widgets"]
+        widgets[0]["fit"] = "contain"
+        widgets[1]["fit"] = "cover"
+        widgets[2]["fit"] = "stretch"
+        main, _ = self.generated_sources()
+        self.assertIn('add_display_image_widget(sd_display_image, 0, "sd_display_image", LV_IMAGE_ALIGN_CONTAIN)', main)
+        self.assertIn('add_display_image_widget(logo_1, 2, "logo_1", LV_IMAGE_ALIGN_COVER)', main)
+        self.assertIn('add_display_image_widget(logo_2, 3, "logo_2", LV_IMAGE_ALIGN_STRETCH)', main)
+        self.assertIn('add_display_image_widget(logo_3, 4, "logo_3", LV_IMAGE_ALIGN_DEFAULT)', main)
+        lv_conf = (self.directory / "build/src/lv_conf.h").read_text()
+        self.assertIn("#define LV_DRAW_SW_SUPPORT_RGB565A8 1", lv_conf)
+
+    def test_no_fit_keeps_rgb565a8_disabled(self):
+        widgets = self.config["cyd_sd_http_server"]["display_images"]["widgets"]
+        for widget in widgets:
+            widget.pop("fit", None)
+        self.generated_sources()
+        lv_conf = (self.directory / "build/src/lv_conf.h").read_text()
+        self.assertIn("#define LV_DRAW_SW_SUPPORT_RGB565A8 0", lv_conf)
+
+    def test_legacy_widget_accepts_fit(self):
+        server = self.config["cyd_sd_http_server"]
+        display = server.pop("display_images")
+        widget = display.pop("widgets")[0]
+        server["display_image"] = {**display, **widget, "fit": "contain"}
+        main, _ = self.generated_sources()
+        self.assertIn("LV_IMAGE_ALIGN_CONTAIN", main)
+
+    def test_invalid_widget_fit_is_rejected(self):
+        self.config["cyd_sd_http_server"]["display_images"]["widgets"][0]["fit"] = "zoom"
+        self.run_config(error="fit")
+
     def test_missing_api(self):
         self.hidden_widget()
         self.config.pop("api")

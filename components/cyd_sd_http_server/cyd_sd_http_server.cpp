@@ -220,9 +220,9 @@ CydSdHttpServer::CachedImage::~CachedImage() {
 }
 
 void CydSdHttpServer::add_display_image_widget(lv_obj_t *widget, size_t initial_image_index,
-                                                const std::string &name) {
+                                                const std::string &name, lv_image_align_t fit_mode) {
   this->display_image_widgets_.push_back(
-      {widget, nullptr, name, initial_image_index, initial_image_index, nullptr, {}});
+      {widget, nullptr, name, initial_image_index, initial_image_index, fit_mode, nullptr, {}});
 }
 
 void CydSdHttpServer::set_image_select(size_t widget_index, CydSdImageSelect *image_select) {
@@ -517,6 +517,13 @@ bool CydSdHttpServer::select_image(size_t widget_index, size_t image_index) {
     }
   }
 
+  // LVGL cannot reliably scale images decoded in streaming tiles.
+  if (cached == nullptr && widget.fit_mode != LV_IMAGE_ALIGN_DEFAULT) {
+    ESP_LOGW(TAG, "Cannot fit SD image widget=%s path=%s: decoded PSRAM cache is unavailable", widget.name.c_str(),
+             image.virtual_path.c_str());
+    return false;
+  }
+
   if (!widget.active_lvgl_source.empty())
     lv_image_cache_drop(widget.active_lvgl_source.c_str());
   if (cached != nullptr) {
@@ -529,6 +536,9 @@ bool CydSdHttpServer::select_image(size_t widget_index, size_t image_index) {
     ::lv_image_set_src(widget.widget, widget.active_lvgl_source.c_str());
     widget.active_cached_image = nullptr;
   }
+  // Fit the selected source, not the one-pixel compile-time placeholder.
+  if (widget.fit_mode != LV_IMAGE_ALIGN_DEFAULT)
+    lv_image_set_inner_align(widget.widget, widget.fit_mode);
   lv_obj_invalidate(widget.widget);
   this->evict_stale_cache_entries_(generation);
   widget.selected_image_index = image_index;

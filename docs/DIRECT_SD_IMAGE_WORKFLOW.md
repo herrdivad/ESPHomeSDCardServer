@@ -17,9 +17,12 @@ ID at compile time.
 During server setup, the C++ code resolves every widget's `initial_image`
 through the shared name-to-path mapping. With the default cache enabled, each
 unique file is read and decoded once into an RGB565 buffer in PSRAM. Widgets
-using the same path share that one descriptor. If PSRAM is unavailable, an
-image is too large, or decoding fails, only that widget changes to its
-`S:/...` streaming source. No `on_boot` lambda is required.
+using the same path share that one descriptor. An optional per-widget `fit`
+setting lets LVGL draw the same source at different sizes. If PSRAM is
+unavailable, an image is too large, or decoding fails, a widget without `fit`
+changes to its `S:/...` streaming source. A widget with `fit` keeps its previous
+source because LVGL 9.5's incremental JPEG decoder does not reliably scale the
+full image from streaming. No `on_boot` lambda is required.
 
 When a user chooses `Bild 2` in one widget's Home Assistant Select, that Select
 passes both its widget index and the selected option index to the server. The
@@ -273,6 +276,22 @@ and [mixed-mode example](../examples/fnk0104s-hidden-images.yaml).
 
 ## Cache behavior
 
+Set `fit: contain` on a widget to scale the complete image into its configured
+width and height while preserving its aspect ratio. `cover` fills that area and
+may crop edges; `stretch` fills it without preserving the ratio. Omit `fit` or
+use `none` for the original unscaled placement. The setting also works with
+the compatible singular `display_image` form. See the
+[`image_fit_demo_page` example](../examples/fnk0104s-esp-idf.yaml), where two
+widgets select the same SD path at different sizes.
+
+The cache stores pixels at the SD image's source dimensions. Scaling does not
+create a resized cache entry or reduce the source buffer's size. It adds draw
+work whenever LVGL redraws a scaled widget.
+
+`fit` needs the complete decoded source in PSRAM. A cache miss that cannot be
+filled leaves the current widget image and Select state unchanged. With
+`max_size: 0`, omit `fit` to use the existing streaming path.
+
 The default `max_size: 1MB` is a hard decoded-pixel budget, not a boot-time
 reservation. It can be configured from `0` (streaming only) up to `4MB` on
 devices with sufficient PSRAM. Each opaque RGB565 pixel needs two bytes.
@@ -283,17 +302,20 @@ recently used entry that is not currently assigned to any widget.
 The configured maximum is not preallocated or guaranteed to be available.
 Decoded entries are allocated individually and only in PSRAM; LVGL, display
 buffers, decoder work memory, and other components still need their own memory.
-If PSRAM allocation fails, the affected widget uses `S:/...` streaming.
+If PSRAM allocation fails, a widget without `fit` uses `S:/...` streaming; a
+widget with `fit` keeps its previous image.
 
 Cache identity is the normalized SD path plus its media generation. Two widgets
 showing the same path therefore share one decoded allocation. Before eviction,
 the component scans all widget bindings; a descriptor still referenced by even
 one widget cannot be freed. When every cache entry is referenced and a new
-unique image cannot fit, that new widget uses the bounded streaming fallback.
+unique image cannot fit, a widget without `fit` uses the bounded streaming
+fallback. A widget with `fit` keeps its previous image and Select state.
 
 Only PSRAM is accepted for decoded entries. Systems without PSRAM retain the
-same mapping and Home Assistant Select but stream through `S:`. A cache entry
-larger than the configured budget also streams. `file_buffer_size` is separate:
+same mapping and Home Assistant Select; widgets without `fit` stream through
+`S:`. A cache entry larger than the configured budget also streams for widgets
+without `fit`. `file_buffer_size` is separate:
 it is a short-lived per-open-file read cache that accelerates the initial
 decode without retaining another finished frame.
 

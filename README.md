@@ -22,6 +22,7 @@
 - **Bring SD images to your dashboard** — static LVGL widgets, Home Assistant dropdowns, or text status with automation actions.
 - **Cache on demand, stream when needed** — dynamically allocated PSRAM image cache with direct SD-streaming fallback.
 - **One image library, shared memory** — one YAML allow-list for all widgets; the same cached image uses one pixel buffer across multiple widgets.
+- **One source, different widget sizes** — optional per-widget `fit` modes scale a shared cached image without resized SD files.
 - **Prepare and transfer with helper tools** — host-side LVGL BIN conversion and streaming Python uploads with optional SHA-256 verification.
 
 Native, streaming SD-card file transfer for the Freenove FNK0104S. The ESPHome
@@ -46,8 +47,13 @@ reliably in those tests.
 
 The maintainer also reported successful physical-device operation of the hidden
 image Select, its HA text status, and image switching through the HA action on
-2026-10-10. Reconnect, migration, and endurance scenarios remain open in the
-hardware matrix.
+2026-10-10. On the same date, the maintainer confirmed that fitted images scale
+correctly after the RGB565A8 fix and do not require a second image buffer.
+The RGB565 color-format warning has disappeared. Occasional warnings about
+roughly 150-850 ms of computation during new uncached operations were already
+observed before this fix.
+Reconnect, migration, and endurance scenarios remain open in the hardware
+matrix.
 
 Still pending are systematic tests of failures and recovery, simultaneous
 access by multiple clients, operator mistakes, power interruptions, and SD-card
@@ -106,7 +112,7 @@ comparative performance benchmark against the original project is claimed.
 | Keep a strong API key in `secrets.yaml` and restrict access to a trusted LAN. | Commit credentials or expose the plain-HTTP service to the internet. |
 | Upload one file at a time, create parent folders first, and opt into overwrites deliberately. | Send multipart or chunked uploads, assume recursive folder creation/deletion, or expect parallel upload support. |
 | Use virtual paths such as `/images/photo.jpg` and URL-encode query values. | Pass `/sdcard/...`, `S:/...`, traversal segments, or internal `.cyd-upload-` / `.cyd-backup-` names to the HTTP API. |
-| Prepare baseline JPEG or compatible LVGL BIN assets at the intended display dimensions. | Use PNG or progressive JPEG directly in the SD image display path, or assume any `.bin` file is an image. |
+| Prepare baseline JPEG or compatible LVGL BIN assets at a resolution suitable for the largest widget that uses them. | Use PNG or progressive JPEG directly in the SD image display path, or assume any `.bin` file is an image. |
 | Keep the 16 KiB loop-task stack for JPEG rendering and budget PSRAM for all components. | Assume the cache limit reserves memory or increase it without checking available PSRAM. |
 | Handle errors and verify important transfers, for example with the Python uploader's `--verify`. | Treat recovery logic as a guarantee against power loss, card failure, or user mistakes. |
 
@@ -323,11 +329,60 @@ mapping with that example, remove the unused logo widgets or map them as well.
           name: Display image
       - image_widget: logo_1
         initial_image: Logo 1
+        fit: contain
 ```
 
 Here, `sd_display_image` exposes a Home Assistant dropdown and `logo_1` loads an
 initial image without creating a Select entity. All Selects offer the shared
-image list; prepare assets for the dimensions of the widgets that will use them.
+image list.
+
+### Reuse one SD image at different widget sizes
+
+Set `fit: contain` on each widget that should scale its selected image to fit.
+The setting keeps the source's aspect ratio and centers it inside the widget;
+unused space shows the widget background. Two widgets can select the same image
+name and SD path at different sizes. They share one decoded RGB565 buffer in the
+PSRAM cache, and LVGL scales that buffer separately while drawing each widget.
+The [FNK0104S example](examples/fnk0104s-esp-idf.yaml) includes an
+`image_fit_demo_page` with 320 × 300 and 160 × 120 widgets using `Bild 1`.
+When `fit` is configured, the component enables LVGL's RGB565A8 software
+transform support automatically. Rebuild and flash the firmware after adding
+`fit`; replacing an SD image alone cannot change this compile-time setting.
+
+```yaml
+    images:
+      - name: Photo
+        path: /images/photo.jpg
+    widgets:
+      - image_widget: large_photo
+        initial_image: Photo
+        fit: contain
+      - image_widget: small_photo
+        initial_image: Photo
+        fit: contain
+```
+
+`fit` is optional for each widget, including the compatible singular
+`display_image` configuration. Its values are:
+
+| Value | Display behavior |
+| --- | --- |
+| Omitted or `none` | Existing unscaled placement; a smaller widget can crop the source. |
+| `contain` | Preserve aspect ratio and show the entire image inside the widget. |
+| `cover` | Preserve aspect ratio and fill the widget; edges may be cropped. |
+| `stretch` | Fill the widget in both directions; aspect ratio may change. |
+
+Use one source sized for the largest intended display area. A 320 × 480 RGB565
+source occupies 307,200 bytes of decoded PSRAM whether it appears once or in
+several smaller widgets. Scaling does not reduce that source allocation or the
+CPU work needed to draw it. The SD file exists only once; a JPEG typically uses
+less SD space than an uncompressed BIN at the same resolution. `fit` requires a
+successful PSRAM cache entry: if the source is too large, PSRAM is unavailable,
+or the cache budget is exhausted, the widget keeps its previous image and its
+Select state does not change. Widgets without `fit` retain the existing
+SD-streaming fallback. This restriction avoids scaled drawing from LVGL's
+incremental JPEG decoder; [LVGL 9.5 has a reported JPEG reduction
+issue](https://github.com/lvgl/lvgl/issues/10466).
 
 ### Hidden image Selects: text status and HA automations
 
@@ -474,7 +529,8 @@ The direct-image path accepts:
 - `.bin`: an LVGL 9.5-compatible binary image asset.
 
 Progressive JPEG and PNG are not supported by this path. Convert photographs to
-baseline JPEG at the display's intended dimensions (320 x 480 in the example).
+baseline JPEG at a resolution suitable for the largest intended widget
+(320 x 480 for the full-screen image in the example).
 
 The `cache` block is optional and defaults to the values shown above. It does
 not reserve 1 MB at boot. The component allocates decoded RGB565 frames from
@@ -489,15 +545,15 @@ through LVGL and SPI. The first load remains a decode operation.
 A larger limit is only a budget, not a guaranteed reservation. Allocation
 still happens per decoded image and exclusively in PSRAM. Choose 4 MB only on
 devices with enough free PSRAM for LVGL, display buffers, decoders, and all
-other components. If an allocation fails, the affected image safely falls back
-to direct `S:/...` streaming.
+other components. If an allocation fails, a widget without `fit` falls back to
+direct `S:/...` streaming. A widget with `fit` keeps its previous image.
 
 The decoded cache is shared by SD path across all configured widgets. If two
 widgets show the same file, both descriptors reference one RGB565 allocation.
 Eviction scans every widget and never frees an entry that is still assigned to
 any of them. If the sum of simultaneously referenced unique images is larger
-than `max_size`, entries that cannot fit use the safe `S:/...` streaming
-fallback instead of exceeding the limit.
+than `max_size`, widgets without `fit` use the safe `S:/...` streaming fallback
+for entries that cannot fit. Widgets with `fit` keep their previous image.
 
 Four 240 x 160 RGB565 logo widgets together use 307,200 bytes. Define all four
 under `widgets` and their paths under the shared `images` list; the component
@@ -511,8 +567,8 @@ the BIN decoder's small line reads into fewer larger FATFS/SDMMC reads and also
 helps incremental JPEG input. Set `max_size: 0` to disable decoded-frame
 caching, or `file_buffer_size: 0` to restore uncached LVGL file reads. The
 decoded cache never falls back to internal RAM: when PSRAM is absent or an
-allocation fails, the component logs the reason and uses the original
-`S:/...` streaming path.
+allocation fails, the component logs the reason. Widgets without `fit` use the
+original `S:/...` streaming path; widgets with `fit` keep their previous image.
 
 Replacing or deleting a mapped image through the HTTP API invalidates the
 decoded generation. Pixels currently referenced by widgets remain valid, but

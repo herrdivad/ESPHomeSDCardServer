@@ -102,6 +102,9 @@ cyd_sd_http_server:
       # esphome.fnk0104s_hidden_images_cyd_sd_set_logo_1 with an option field.
       - image_widget: logo_1
         initial_image: Logo 1
+        # Scale the selected source into this widget while keeping its ratio.
+        # This enables the required LVGL RGB565A8 software transform at build time.
+        fit: contain
         select:
           id: logo_1_select
           name: Logo image

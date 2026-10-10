@@ -78,6 +78,7 @@ Testing/
 Bild*
 *.bin
 *AGENTS*
+patchToServer.md
 
 # python
 # Byte-compiled / optimized / DLL files

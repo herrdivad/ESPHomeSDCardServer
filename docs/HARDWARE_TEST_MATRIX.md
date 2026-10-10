@@ -23,7 +23,12 @@ target hardware and recorded.
 | Re-selecting a cached image logs `HIT` without another SD decode | Not run |
 | Leaving and returning to the image page redraws in 300-500 ms or less | Passed: approximately 156 ms reported |
 | Multiple widget initial images preload without an `on_boot` lambda | Not run |
-| Two widgets sharing one path use one decoded PSRAM allocation | Not run |
+| Two widgets sharing one path use one decoded PSRAM allocation | Passed per maintainer report on 2026-10-10: scaled widgets did not require an additional image buffer; no measured PSRAM figures supplied |
+| Two widgets display the same SD image at different sizes with `fit: contain` | Passed per maintainer report on 2026-10-10 after RGB565A8 fix: images scale correctly |
+| Fitted RGB565 images render without `Color format 0x12 is not enabled` warnings | Passed per maintainer report on 2026-10-10: warning no longer appears after RGB565A8 fix |
+| Occasional long computation warnings during new uncached operations | Observed by maintainer before and after the scaling fix: approximately 150-850 ms; separate from the RGB565 warning |
+| `fit: cover` crops and `fit: stretch` fills as configured | Not run |
+| A fitted widget keeps its previous image and Select state when PSRAM caching fails | Not run |
 | Independent widget Select entities update only their own widget/state | Not run |
 | Static widget without `select` creates no Home Assistant entity | Not run |
 | Hidden Select exposes text status and a working HA image action on the display | Passed: maintainer reported successful physical-device test on 2026-10-10 |

@@ -53,7 +53,8 @@ class CydSdHttpServer : public Component {
   void add_display_image(const std::string &name, const std::string &path) {
     this->display_images_.push_back({name, path});
   }
-  void add_display_image_widget(lv_obj_t *widget, size_t initial_image_index, const std::string &name);
+  void add_display_image_widget(lv_obj_t *widget, size_t initial_image_index, const std::string &name,
+                                lv_image_align_t fit_mode = LV_IMAGE_ALIGN_DEFAULT);
   void set_image_select(size_t widget_index, CydSdImageSelect *image_select);
   bool select_image(size_t widget_index, size_t image_index);
 #endif
@@ -133,6 +134,7 @@ class CydSdHttpServer : public Component {
     std::string name;
     size_t initial_image_index{0};
     size_t selected_image_index{0};
+    lv_image_align_t fit_mode{LV_IMAGE_ALIGN_DEFAULT};
     CachedImage *active_cached_image{nullptr};
     std::string active_lvgl_source;
   };

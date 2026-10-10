@@ -23,16 +23,25 @@ does not simulate actual SD storage or LVGL rendering.
 
 `test_hidden_image_config.py` runs real ESPHome validation and source generation
 against temporary configurations with dummy credentials. It covers old and new
-schemas, mixed modes, existing API actions, generated ID/name conflicts, and
-builds without API/display support. Use `.venv/bin/python -m unittest discover
--s tests -v` when ESPHome is installed in the virtual environment. These tests
-are skipped when the selected Python has no ESPHome installation.
+schemas, per-widget image fit modes, generated RGB565A8 transform support,
+mixed modes, existing API actions,
+generated ID/name conflicts, and builds without API/display support. Use
+`.venv/bin/python -m unittest discover -s tests -v` when ESPHome is installed
+in the virtual environment. These tests are skipped when the selected Python
+has no ESPHome installation.
 
 Validation recorded on 2026-10-10 with ESPHome 2026.8.0 / ESP-IDF 5.5.5:
 
-- All 16 host/configuration/code-generation tests passed.
-- Full firmware builds passed for `examples/fnk0104s-esp-idf.yaml` and
-  `examples/fnk0104s-hidden-images.yaml`.
+- All 20 host/configuration/code-generation tests passed.
+- A full firmware build passed for `examples/fnk0104s-esp-idf.yaml` with the
+  RGB565A8 transform configuration fix. Source generation passed for
+  `examples/fnk0104s-hidden-images.yaml`; its full build passed before this
+  configuration fix and was not rerun afterward.
+- The maintainer reported successful physical-device scaling without an
+  additional image buffer after flashing the RGB565A8 fix on 2026-10-10.
+  The old RGB565 color-format warning no longer appears. Occasional long
+  computation warnings of roughly 150-850 ms during new uncached operations
+  were already present before this fix. Exact PSRAM figures were not reported.
 - The maintainer reported a successful physical-device test of the hidden image
   Select and its HA image action on 2026-10-10. See
   `docs/HARDWARE_TEST_MATRIX.md` for the remaining hardware checks.

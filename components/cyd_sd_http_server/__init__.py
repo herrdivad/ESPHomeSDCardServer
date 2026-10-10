@@ -39,6 +39,7 @@ CONF_DISPLAY_IMAGE = "display_image"
 CONF_DISPLAY_IMAGES = "display_images"
 CONF_DRIVE_LETTER = "drive_letter"
 CONF_IMAGE_WIDGET = "image_widget"
+CONF_FIT = "fit"
 CONF_IMAGES = "images"
 CONF_INITIAL_IMAGE = "initial_image"
 CONF_INTERNAL_PULLUPS = "internal_pullups"
@@ -184,6 +185,7 @@ DISPLAY_WIDGET_SCHEMA = cv.Schema(
             cv.use_id(lv_image_t), cv.requires_component("lvgl")
         ),
         cv.Optional(CONF_INITIAL_IMAGE): cv.string_strict,
+        cv.Optional(CONF_FIT): cv.one_of("none", "contain", "cover", "stretch", lower=True),
         cv.Optional(CONF_SELECT): IMAGE_SELECT_SCHEMA,
     }
 )
@@ -201,6 +203,7 @@ DISPLAY_IMAGE_SCHEMA = cv.Schema(
             cv.Length(min=1),
         ),
         cv.Optional(CONF_INITIAL_IMAGE): cv.string_strict,
+        cv.Optional(CONF_FIT): cv.one_of("none", "contain", "cover", "stretch", lower=True),
         cv.Optional(CONF_CACHE, default={}): IMAGE_CACHE_SCHEMA,
         cv.Required(CONF_SELECT): IMAGE_SELECT_SCHEMA,
     }
@@ -274,6 +277,10 @@ def _validate_display_images(config):
             widget[CONF_IMAGE_STATUS] = text_sensor.text_sensor_schema()(status)
             selection[CONF_INTERNAL] = True
             selection.pop(CONF_MQTT_ID, None)
+
+    # LVGL gates RGB565 software transforms on RGB565A8 support as well.
+    if any(widget.get(CONF_FIT) not in (None, "none") for widget in widgets):
+        lvgl_defines.add_define("LV_DRAW_SW_SUPPORT_RGB565A8")
 
     # ESPHome 2026.8 uses LVGL 9.5. Its built-in Tiny JPEG decoder performs
     # incremental 8x8-tile decoding and registers itself when this define is on.
@@ -402,11 +409,19 @@ async def to_code(config):
         for widget_index, widget in enumerate(widgets):
             image_widget = await cg.get_variable(widget[CONF_IMAGE_WIDGET])
             initial_index = names.index(widget[CONF_INITIAL_IMAGE])
+            fit_mode = {
+                None: "LV_IMAGE_ALIGN_DEFAULT",
+                "none": "LV_IMAGE_ALIGN_DEFAULT",
+                "contain": "LV_IMAGE_ALIGN_CONTAIN",
+                "cover": "LV_IMAGE_ALIGN_COVER",
+                "stretch": "LV_IMAGE_ALIGN_STRETCH",
+            }[widget.get(CONF_FIT)]
             cg.add(
                 var.add_display_image_widget(
                     image_widget,
                     initial_index,
                     str(widget[CONF_IMAGE_WIDGET]),
+                    cg.RawExpression(fit_mode),
                 )
             )
 

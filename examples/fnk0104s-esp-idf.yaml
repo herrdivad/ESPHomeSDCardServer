@@ -109,6 +109,16 @@ cyd_sd_http_server:
         initial_image: Logo 3
       - image_widget: logo_4
         initial_image: Logo 4
+      # Both widgets below use the same SD file and decoded PSRAM buffer.
+      # LVGL scales it separately for each widget without resized image files.
+      # Rebuild firmware after enabling fit; the RGB565 transform needs
+      # RGB565A8 software support, which this component enables automatically.
+      - image_widget: large_fit_preview
+        initial_image: Bild 1
+        fit: contain
+      - image_widget: small_fit_preview
+        initial_image: Bild 1
+        fit: contain
 
 # Display bus of the FNK0104S.
 spi:
@@ -191,6 +201,23 @@ lvgl:
             y: 240
             width: 160
             height: 240
+    - id: image_fit_demo_page
+      bg_color: 0x000000
+      widgets:
+        - image:
+            id: large_fit_preview
+            src: sd_image_placeholder
+            x: 0
+            y: 0
+            width: 320
+            height: 300
+        - image:
+            id: small_fit_preview
+            src: sd_image_placeholder
+            x: 0
+            y: 340
+            width: 160
+            height: 120
 
 output:
   - platform: ledc
