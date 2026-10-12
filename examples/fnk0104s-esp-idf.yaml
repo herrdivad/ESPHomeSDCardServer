@@ -66,6 +66,8 @@ cyd_sd_http_server:
   # Optional direct SD-to-LVGL image access. All widgets share one allow-list
   # and PSRAM cache. A widget with select creates its own Home Assistant
   # dropdown; omit select for a static SD-backed widget.
+  # This block also creates native HA diagnostic sensors for PSRAM/cache bytes
+  # and a button to release unused cached images. No extra YAML is needed.
   display_images:
     drive_letter: S
     # Decoded RGB565 frames are allocated only in PSRAM and retained with LRU

@@ -2,7 +2,7 @@
 
 import esphome.codegen as cg
 from esphome import pins
-from esphome.components import esp32, select, socket, text_sensor
+from esphome.components import button, esp32, select, sensor, socket, text_sensor
 from esphome.components.lvgl import defines as lvgl_defines
 from esphome.components.lvgl.types import lv_image_t
 import esphome.config_validation as cv
@@ -55,6 +55,16 @@ CONF_URL_PREFIX = "url_prefix"
 CONF_WIDGETS = "widgets"
 CONF_HIDDEN = "hidden"
 CONF_IMAGE_STATUS = "image_status"
+CONF_DIAGNOSIS = "diagnosis"
+
+DIAGNOSIS_SENSORS = (
+    ("psram_total", "SD PSRAM Total", "set_psram_total_sensor"),
+    ("psram_free", "SD PSRAM Free", "set_psram_free_sensor"),
+    ("psram_largest_free", "SD PSRAM Largest Free Block", "set_psram_largest_free_sensor"),
+    ("image_cache_limit", "SD Image Cache Limit", "set_image_cache_limit_sensor"),
+    ("image_cache_used", "SD Image Cache Used", "set_image_cache_used_sensor"),
+    ("image_cache_reclaimable", "SD Image Cache Reclaimable", "set_image_cache_reclaimable_sensor"),
+)
 
 MAX_DECODED_CACHE_SIZE = 4 * 1024 * 1024
 MAX_FILE_BUFFER_SIZE = 64 * 1024
@@ -62,6 +72,7 @@ MAX_FILE_BUFFER_SIZE = 64 * 1024
 cyd_ns = cg.esphome_ns.namespace("cyd_sd_http_server")
 CydSdHttpServer = cyd_ns.class_("CydSdHttpServer", cg.Component)
 CydSdImageSelect = cyd_ns.class_("CydSdImageSelect", select.Select)
+CydSdCacheReleaseButton = cyd_ns.class_("CydSdCacheReleaseButton", button.Button)
 
 
 def _display_widgets(config):
@@ -77,6 +88,8 @@ def _display_widgets(config):
 
 def AUTO_LOAD(config):
     components = ["network", "select", "socket"]
+    if config.get(CONF_DISPLAY_IMAGES) or config.get(CONF_DISPLAY_IMAGE):
+        components.extend(("button", "sensor"))
     # AUTO_LOAD runs before schema validation, including ensure_list conversion.
     for widget in _display_widgets(config):
         if not isinstance(widget, dict):
@@ -282,6 +295,24 @@ def _validate_display_images(config):
     if any(widget.get(CONF_FIT) not in (None, "none") for widget in widgets):
         lvgl_defines.add_define("LV_DRAW_SW_SUPPORT_RGB565A8")
 
+    diagnosis = {}
+    for key, name, _ in DIAGNOSIS_SENSORS:
+        diagnosis[key] = sensor.sensor_schema(
+            unit_of_measurement="B",
+            accuracy_decimals=0,
+            device_class="data_size",
+            state_class="measurement",
+            entity_category="diagnostic",
+        )({CONF_ID: f"{config[CONF_ID]}_{key}", CONF_NAME: name})
+    diagnosis["release_button"] = button.button_schema(
+        CydSdCacheReleaseButton,
+        entity_category="diagnostic",
+    )({
+        CONF_ID: f"{config[CONF_ID]}_release_unused_image_cache",
+        CONF_NAME: "Release Unused SD Image Cache",
+    })
+    config[CONF_DIAGNOSIS] = diagnosis
+
     # ESPHome 2026.8 uses LVGL 9.5. Its built-in Tiny JPEG decoder performs
     # incremental 8x8-tile decoding and registers itself when this define is on.
     lvgl_defines.add_lv_use("tjpgd")
@@ -397,6 +428,7 @@ async def to_code(config):
     display = config.get(CONF_DISPLAY_IMAGES) or legacy_display
     if display is not None:
         cg.add_define("USE_CYD_SD_LVGL")
+        cg.add_define("USE_CYD_SD_DIAGNOSIS")
         cg.add(var.set_lvgl_drive_letter(display[CONF_DRIVE_LETTER]))
         cache = display[CONF_CACHE]
         cg.add(var.set_decoded_image_cache_size(cache[CONF_MAX_SIZE]))
@@ -439,6 +471,12 @@ async def to_code(config):
                     cg.add_define("USE_API_CUSTOM_SERVICES")
                     status = await text_sensor.new_text_sensor(widget[CONF_IMAGE_STATUS])
                     cg.add(image_select.set_hidden_status(status, _hidden_action_name(widget)))
+
+        diagnosis = config[CONF_DIAGNOSIS]
+        for key, _, setter in DIAGNOSIS_SENSORS:
+            value = await sensor.new_sensor(diagnosis[key])
+            cg.add(getattr(var, setter)(value))
+        await button.new_button(diagnosis["release_button"], var)
 
     # ESPHome excludes these native ESP-IDF components unless requested.
     esp32.include_builtin_idf_component("fatfs")

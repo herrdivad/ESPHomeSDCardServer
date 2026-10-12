@@ -52,6 +52,12 @@ correctly after the RGB565A8 fix and do not require a second image buffer.
 The RGB565 color-format warning has disappeared. Occasional warnings about
 roughly 150-850 ms of computation during new uncached operations were already
 observed before this fix.
+On 2026-10-12, the maintainer confirmed on the physical device that the native
+PSRAM/cache diagnostic values reach the Home Assistant UI correctly and that
+the cache-release button works. The HA history plot displays the values, and
+assigned images remain visible after cache release. The maintainer confirmed
+that the remaining diagnosis hardware checks, including hidden-page behavior
+and released-byte accounting, are complete.
 Reconnect, migration, and endurance scenarios remain open in the hardware
 matrix.
 
@@ -575,6 +581,41 @@ decoded generation. Pixels currently referenced by widgets remain valid, but
 the next selection reloads the changed file instead of returning stale cached
 data.
 
+### Native Home Assistant PSRAM diagnostics
+
+When `display_images` or the compatible `display_image` block is configured,
+the component creates six numeric diagnostic sensors and one Button entity
+automatically. No `sensor:`, `button:`, lambda, or extra ESPHome YAML is needed.
+With the existing `api:` connection, they appear on the device's Home Assistant
+page under diagnostic entities:
+
+| Entity name | Meaning |
+|---|---|
+| SD PSRAM Total | PSRAM bytes available to the ESP-IDF allocator |
+| SD PSRAM Free | Currently free PSRAM bytes across the whole device |
+| SD PSRAM Largest Free Block | Largest contiguous PSRAM allocation currently possible |
+| SD Image Cache Limit | Configured decoded-image cache budget in bytes; not a reservation |
+| SD Image Cache Used | Bytes in retained decoded RGB565 image buffers |
+| SD Image Cache Reclaimable | Cache bytes assigned to no image widget |
+| Release Unused SD Image Cache | Button that frees only reclaimable image buffers |
+
+The sensor values use byte units and the diagnostic entity category. Changing
+values have `measurement` state class, so Home Assistant can show their history
+after it records them. Open a sensor's history or add a
+[History graph card](https://www.home-assistant.io/dashboards/history-graph/)
+in the HA dashboard to plot image switches and cache releases. Cache
+values update after selections and button presses; all values are checked every
+10 seconds. Repeated unchanged values are not republished.
+
+The cache limit is not preallocated. `SD PSRAM Total` and `SD PSRAM Free` cover
+all PSRAM users, including LVGL and other components, while `SD Image Cache
+Used` counts only this component's decoded RGB565 pixel buffers. Pressing the
+button does not detach pictures from widgets, including widgets on hidden
+pages. It reports the released entry count and bytes in the device log; a
+zero-byte release is normal when every cached picture is still assigned. The
+device-wide free PSRAM change can differ from the pixel-byte count because of
+allocator overhead and concurrent allocations.
+
 An earlier reference FNK0104S example build with direct-image support occupied
 about 1.10 MB of its 1.835 MB OTA application partition (about 60%), leaving roughly 0.74 MB
 for normal ESPHome entities, automations, and display work. Treat these figures
@@ -583,6 +624,8 @@ stack setting adds 8 KiB of internal RAM compared with the default and has no
 meaningful flash impact. Much larger features such as a camera, voice stack,
 TLS-heavy integrations, or additional media decoders should be compiled and
 checked against the same partition budget before being added.
+The 2026-10-11 example build with native diagnostics produced a 1,119,907-byte
+firmware image, using 61% of the 1,835,008-byte application partition.
 
 Names and paths must be unique. Paths must be normalized absolute virtual paths
 and may not contain traversal, reserved upload/backup names, or unsupported

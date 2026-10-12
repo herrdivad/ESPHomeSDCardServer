@@ -16,6 +16,11 @@
 #include <lvgl.h>
 #endif
 
+#ifdef USE_CYD_SD_DIAGNOSIS
+#include "esphome/components/button/button.h"
+#include "esphome/components/sensor/sensor.h"
+#endif
+
 #ifdef USE_CYD_SD_HIDDEN_SELECT
 #include "esphome/components/api/custom_api_device.h"
 #include "esphome/components/text_sensor/text_sensor.h"
@@ -48,7 +53,10 @@ class CydSdHttpServer : public Component {
 
 #ifdef USE_CYD_SD_LVGL
   void set_lvgl_drive_letter(const std::string &value) { this->lvgl_drive_letter_ = value[0]; }
-  void set_decoded_image_cache_size(size_t value) { this->decoded_image_cache_size_ = value; }
+  void set_decoded_image_cache_size(size_t value) {
+    this->decoded_image_cache_size_ = value;
+    this->configured_image_cache_size_ = value;
+  }
   void set_lvgl_file_cache_size(size_t value) { this->lvgl_file_cache_size_ = value; }
   void add_display_image(const std::string &name, const std::string &path) {
     this->display_images_.push_back({name, path});
@@ -57,6 +65,17 @@ class CydSdHttpServer : public Component {
                                 lv_image_align_t fit_mode = LV_IMAGE_ALIGN_DEFAULT);
   void set_image_select(size_t widget_index, CydSdImageSelect *image_select);
   bool select_image(size_t widget_index, size_t image_index);
+#endif
+
+#ifdef USE_CYD_SD_DIAGNOSIS
+  void set_psram_total_sensor(sensor::Sensor *value) { this->psram_total_sensor_ = value; }
+  void set_psram_free_sensor(sensor::Sensor *value) { this->psram_free_sensor_ = value; }
+  void set_psram_largest_free_sensor(sensor::Sensor *value) { this->psram_largest_free_sensor_ = value; }
+  void set_image_cache_limit_sensor(sensor::Sensor *value) { this->image_cache_limit_sensor_ = value; }
+  void set_image_cache_used_sensor(sensor::Sensor *value) { this->image_cache_used_sensor_ = value; }
+  void set_image_cache_reclaimable_sensor(sensor::Sensor *value) { this->image_cache_reclaimable_sensor_ = value; }
+  void release_unused_image_cache();
+  void loop() override;
 #endif
 
   void setup() override;
@@ -150,6 +169,9 @@ class CydSdHttpServer : public Component {
   void evict_cache_entry_(CachedImage *entry);
   void evict_stale_cache_entries_(uint32_t generation);
   void mark_mapped_image_changed_(const std::string &virtual_path);
+#ifdef USE_CYD_SD_DIAGNOSIS
+  void publish_diagnosis_();
+#endif
   static bool lvgl_ready_cb_(lv_fs_drv_t *driver);
   static void *lvgl_open_cb_(lv_fs_drv_t *driver, const char *path, lv_fs_mode_t mode);
   static lv_fs_res_t lvgl_close_cb_(lv_fs_drv_t *driver, void *file);
@@ -187,13 +209,34 @@ class CydSdHttpServer : public Component {
   std::vector<DisplayImage> display_images_;
   std::vector<DisplayImageWidget> display_image_widgets_;
   size_t decoded_image_cache_size_{0};
+  size_t configured_image_cache_size_{0};
   size_t decoded_image_cache_used_{0};
   size_t lvgl_file_cache_size_{0};
   uint64_t cache_use_counter_{0};
   std::atomic<uint32_t> mapped_image_generation_{0};
   std::vector<std::unique_ptr<CachedImage>> decoded_image_cache_;
+#ifdef USE_CYD_SD_DIAGNOSIS
+  sensor::Sensor *psram_total_sensor_{nullptr};
+  sensor::Sensor *psram_free_sensor_{nullptr};
+  sensor::Sensor *psram_largest_free_sensor_{nullptr};
+  sensor::Sensor *image_cache_limit_sensor_{nullptr};
+  sensor::Sensor *image_cache_used_sensor_{nullptr};
+  sensor::Sensor *image_cache_reclaimable_sensor_{nullptr};
+  uint32_t last_diagnosis_publish_ms_{0};
+#endif
 #endif
 };
+
+#ifdef USE_CYD_SD_DIAGNOSIS
+class CydSdCacheReleaseButton : public button::Button {
+ public:
+  explicit CydSdCacheReleaseButton(CydSdHttpServer *parent) : parent_(parent) {}
+
+ protected:
+  void press_action() override;
+  CydSdHttpServer *parent_;
+};
+#endif
 
 #ifdef USE_CYD_SD_LVGL
 class CydSdImageSelect : public select::Select

@@ -38,6 +38,12 @@ target hardware and recorded.
 | Cache eviction never frees an entry referenced by any widget | Not run |
 | Fourth full-screen image evicts the least recently used inactive entry | Not run |
 | Decoded cache remains at or below the configured 1 MB limit | Not run |
+| Native HA PSRAM/cache diagnostic values appear correctly in the HA UI | Passed: maintainer reported successful physical-device test on 2026-10-12 |
+| HA history plots cache and free-PSRAM changes across image selections | Passed: maintainer reported successful physical-device test on 2026-10-12 |
+| Release-unused-cache button releases cached images from the HA UI | Passed: maintainer reported successful physical-device test on 2026-10-12 |
+| Release-unused-cache button preserves assigned images after release | Passed: maintainer reported successful physical-device test on 2026-10-12 |
+| Release-unused-cache button preserves assigned images on hidden pages | Passed: maintainer confirmed the diagnosis job's hardware checks are complete on 2026-10-12 |
+| Cache-used bytes reflect the released pixel allocations | Passed: maintainer confirmed the diagnosis job's hardware checks are complete on 2026-10-12; no numeric measurements recorded here |
 | A configured 4 MB cache stays within its budget and leaves enough PSRAM for LVGL | Not run |
 | `max_size: 0` and unavailable PSRAM use the `S:/` streaming fallback | Not run |
 | Upload/overwrite/delete invalidates mapped cached image data | Not run |

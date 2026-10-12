@@ -25,6 +25,7 @@ class ComponentSyntaxTest(unittest.TestCase):
                 str(component / "sd_storage.cpp"),
                 str(component / "cyd_sd_http_server.cpp"),
                 str(component / "image_select.cpp"),
+                str(component / "diagnosis.cpp"),
             ],
             check=True,
         )

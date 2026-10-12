@@ -162,6 +162,10 @@ void CydSdHttpServer::setup() {
     ESP_LOGI(TAG, "SD server ready on port %u", this->port_);
   else
     ESP_LOGW(TAG, "SD server listening on port %u in unavailable mode", this->port_);
+#ifdef USE_CYD_SD_DIAGNOSIS
+  this->publish_diagnosis_();
+  this->last_diagnosis_publish_ms_ = millis();
+#endif
 }
 
 void CydSdHttpServer::dump_config() {
@@ -521,6 +525,9 @@ bool CydSdHttpServer::select_image(size_t widget_index, size_t image_index) {
   if (cached == nullptr && widget.fit_mode != LV_IMAGE_ALIGN_DEFAULT) {
     ESP_LOGW(TAG, "Cannot fit SD image widget=%s path=%s: decoded PSRAM cache is unavailable", widget.name.c_str(),
              image.virtual_path.c_str());
+#ifdef USE_CYD_SD_DIAGNOSIS
+    this->publish_diagnosis_();
+#endif
     return false;
   }
 
@@ -552,6 +559,9 @@ bool CydSdHttpServer::select_image(size_t widget_index, size_t image_index) {
     ESP_LOGI(TAG, "Display image selected: widget=%s image=%s (%s, streaming fallback)", widget.name.c_str(),
              image.name.c_str(), widget.active_lvgl_source.c_str());
   }
+#ifdef USE_CYD_SD_DIAGNOSIS
+  this->publish_diagnosis_();
+#endif
   return true;
 }
 

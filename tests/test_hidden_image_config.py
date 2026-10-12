@@ -64,6 +64,21 @@ class HiddenImageConfigTest(unittest.TestCase):
         self.assertNotIn("set_hidden_status(", main)
         self.assertIn('App.register_select(sd_display_image_select, "Display image"', main)
 
+    def test_native_diagnostics_without_extra_yaml(self):
+        main, defines = self.generated_sources()
+        self.assertIn("#define USE_CYD_SD_DIAGNOSIS", defines)
+        for name in (
+            "SD PSRAM Total", "SD PSRAM Free", "SD PSRAM Largest Free Block",
+            "SD Image Cache Limit", "SD Image Cache Used",
+            "SD Image Cache Reclaimable",
+        ):
+            self.assertRegex(main, rf'App\.register_sensor\([^\n]*"{name}"')
+        self.assertEqual(main.count("App.register_sensor("), 6)
+        self.assertIn('App.register_button(cyd_sd_server_release_unused_image_cache,', main)
+        self.assertIn('"Release Unused SD Image Cache"', main)
+        self.assertEqual(main.count("App.register_button("), 1)
+        self.assertEqual(main.count("set_state_class(sensor::STATE_CLASS_MEASUREMENT)"), 6)
+
     def test_explicit_false_does_not_require_api(self):
         self.hidden_widget()["select"]["hidden"] = False
         self.config.pop("api")
@@ -114,6 +129,8 @@ class HiddenImageConfigTest(unittest.TestCase):
         server["display_image"] = {**display, **widget}
         self.run_config(generate=True)
         self.assertTrue((self.directory / "build/src/esphome/components/api/user_services.cpp").is_file())
+        main = (self.directory / "build/src/main.cpp").read_text()
+        self.assertIn('App.register_button(cyd_sd_server_release_unused_image_cache,', main)
 
     def test_widget_fit_modes_are_generated_independently(self):
         widgets = self.config["cyd_sd_http_server"]["display_images"]["widgets"]
@@ -187,5 +204,7 @@ class HiddenImageConfigTest(unittest.TestCase):
         main, defines = self.generated_sources()
         self.assertNotIn("USE_CYD_SD_LVGL", defines)
         self.assertNotIn("USE_CYD_SD_HIDDEN_SELECT", defines)
+        self.assertNotIn("USE_CYD_SD_DIAGNOSIS", defines)
         self.assertNotIn("USE_TEXT_SENSOR", defines)
         self.assertNotIn("set_hidden_status(", main)
+        self.assertNotIn("Release Unused SD Image Cache", main)
