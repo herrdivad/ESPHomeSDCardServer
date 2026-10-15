@@ -24,9 +24,9 @@ changes to its `S:/...` streaming source. A widget with `fit` keeps its previous
 source because LVGL 9.5's incremental JPEG decoder does not reliably scale the
 full image from streaming. No `on_boot` lambda is required.
 
-When a user chooses `Bild 2` in one widget's Home Assistant Select, that Select
+When a user chooses `Image 2` in one widget's Home Assistant Select, that Select
 passes both its widget index and the selected option index to the server. The
-server uses `Bild 2 → /images/Bild2.jpg`, then updates only the owning widget.
+server uses `Image 2 → /images/Image2.jpg`, then updates only the owning widget.
 A cache hit is handed to it immediately. A miss is decoded from `S:` and added
 to the shared LRU cache. Other widgets and their Select states do not change.
 Widgets without `select:` remain static and create no Home Assistant entity.
@@ -42,7 +42,7 @@ mapped-file upload/delete, or a streaming fallback.
 flowchart LR
     P["assets/sd-image-placeholder.svg\n1 × 1 black compile-time placeholder"]
     F["Firmware\ncontains the tiny placeholder only"]
-    SD["SD card\n/Bild1.jpg\n/images/Bild2.jpg\nactual media files"]
+    SD["SD card\n/Image1.jpg\n/images/Image2.jpg\nactual media files"]
     C["Optional PSRAM LRU cache\ndecoded RGB565 frames"]
     D["Display\nshows the selected SD image"]
 
@@ -60,7 +60,7 @@ configured initial SD image is available.
 
 The actual photos are never copied into firmware flash and do not belong in
 Home Assistant's `/config/www` directory. Upload them to the SD card through
-the server UI, for example as `/Bild1.jpg`.
+the server UI, for example as `/Image1.jpg`.
 
 ## YAML mapping at build time
 
@@ -91,25 +91,25 @@ cyd_sd_http_server:
       memory: psram
       strategy: lru
     images:
-      - name: Bild 1
-        path: /Bild1.jpg
-      - name: Bild 2
-        path: /images/Bild2.jpg
+      - name: Image 1
+        path: /Image1.jpg
+      - name: Image 2
+        path: /images/Image2.jpg
     widgets:
       - image_widget: sd_display_image
-        initial_image: Bild 1
+        initial_image: Image 1
         select:
           id: sd_display_image_select
           name: Display image
       - image_widget: static_status_icon
-        initial_image: Bild 2
+        initial_image: Image 2
 ```
 
 ```mermaid
 flowchart TD
     Y["ESPHome YAML"]
     W["widgets list\nLVGL widget IDs + initial images"]
-    M["images mapping\nBild 1 → /Bild1.jpg\nBild 2 → /images/Bild2.jpg"]
+    M["images mapping\nImage 1 → /Image1.jpg\nImage 2 → /images/Image2.jpg"]
     S["optional select per widget\nindependent HA entities"]
     C["Generated firmware"]
     L["LVGL image widgets\nstart with the 1 × 1 placeholder"]
@@ -135,7 +135,7 @@ widget initially receives the same shared option list.
 Assistant and does not change the ESP-IDF mount point. The component maps:
 
 ```text
-S:/Bild1.jpg  →  /sdcard/Bild1.jpg
+S:/Image1.jpg  →  /sdcard/Image1.jpg
 ```
 
 ## What happens during boot
@@ -191,22 +191,22 @@ sequenceDiagram
     participant Card as SD card
     participant Cache as PSRAM LRU cache
 
-    Note over API,Select: At boot ESPHome advertises options: Bild 1, Bild 2
-    HA->>API: User selects “Bild 2”
+    Note over API,Select: At boot ESPHome advertises options: Image 1, Image 2
+    HA->>API: User selects “Image 2”
     API->>Select: Select option index 1
     Select->>Server: select_image(widget index, option index 1)
-    Server->>Card: Probe allow-listed /images/Bild2.jpg
+    Server->>Card: Probe allow-listed /images/Image2.jpg
     alt File exists and is available
         Server->>Cache: Find valid decoded image
         alt Cache hit
             Cache-->>Server: Return RGB565 descriptor
         else Cache miss
-            Server->>Card: Read/decode S:/images/Bild2.jpg
+            Server->>Card: Read/decode S:/images/Image2.jpg
             Server->>Cache: Add frame and evict LRU entries if required
         end
         Server->>LVGL: Set only this widget's descriptor or S:/ fallback
         Server->>LVGL: Invalidate only this widget
-        Server->>Select: Publish state “Bild 2”
+        Server->>Select: Publish state “Image 2”
         API-->>HA: Updated selected option
     else File missing, invalid, or busy
         Server-->>Select: Reject selection and log the reason
@@ -214,7 +214,7 @@ sequenceDiagram
     end
 ```
 
-Home Assistant only sends the selected option, such as `Bild 2`. It never sends
+Home Assistant only sends the selected option, such as `Image 2`. It never sends
 an arbitrary SD path. The firmware translates that option through the compiled
 mapping, which prevents a dropdown value from accessing `../`, temporary upload
 files, or an unapproved media file.
@@ -241,7 +241,7 @@ sequenceDiagram
     participant Select as Internal CydSdImageSelect
     participant Server as Existing image controller
     participant Status as Text status sensor
-    HA->>API: option: Bild 2
+    HA->>API: option: Image 2
     API->>Select: SelectCall with allow-listed name
     Select->>Server: select_image(widget, image index)
     alt Source assignment succeeds

@@ -10,8 +10,8 @@ using esphome::cyd_sd_http_server::percent_decode;
 int main() {
   std::string value;
   assert(normalize_virtual_path("/", true, &value) == PathError::NONE && value == "/");
-  assert(normalize_virtual_path("//bilder///foto.jpg/", false, &value) == PathError::NONE && value == "/bilder/foto.jpg");
-  assert(normalize_virtual_path("/Umlaute/Grüße.txt", false, &value) == PathError::NONE);
+  assert(normalize_virtual_path("//images///photo.jpg/", false, &value) == PathError::NONE && value == "/images/photo.jpg");
+  assert(normalize_virtual_path("/unicode/naïve.txt", false, &value) == PathError::NONE);
   assert(normalize_virtual_path("relative", false, &value) == PathError::NOT_ABSOLUTE);
   assert(normalize_virtual_path("/", false, &value) == PathError::ROOT_NOT_ALLOWED);
   assert(normalize_virtual_path("/a/../b", false, &value) == PathError::TRAVERSAL);
@@ -22,8 +22,8 @@ int main() {
   assert(normalize_virtual_path("/a.cyd-backup-2.part", false, &value) == PathError::RESERVED_NAME);
   assert(normalize_virtual_path("/" + std::string(256, 'x'), false, &value) == PathError::SEGMENT_TOO_LONG);
 
-  assert(percent_decode("%2Fbilder%2FGr%C3%BC%C3%9Fe.txt", &value) == PathError::NONE);
-  assert(value == "/bilder/Grüße.txt");
+  assert(percent_decode("%2Funicode%2Fna%C3%AFve.txt", &value) == PathError::NONE);
+  assert(value == "/unicode/naïve.txt");
   assert(percent_decode("%2e%2e%2Fsecret", &value) == PathError::NONE);
   assert(normalize_virtual_path("/" + value, false, &value) == PathError::TRAVERSAL);
   assert(percent_decode("%", &value) == PathError::INVALID_ENCODING);

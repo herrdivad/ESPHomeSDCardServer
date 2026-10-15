@@ -321,15 +321,15 @@ mapping with that example, remove the unused logo widgets or map them as well.
       memory: psram
       strategy: lru
     images:
-      - name: Bild 1
-        path: /Bild1.jpg
-      - name: Bild 2
-        path: /images/Bild2.jpg
+      - name: Image 1
+        path: /Image1.jpg
+      - name: Image 2
+        path: /images/Image2.jpg
       - name: Logo 1
         path: /icons/logo1.bin
     widgets:
       - image_widget: sd_display_image
-        initial_image: Bild 1
+        initial_image: Image 1
         select:
           id: sd_display_image_select
           name: Display image
@@ -340,7 +340,10 @@ mapping with that example, remove the unused logo widgets or map them as well.
 
 Here, `sd_display_image` exposes a Home Assistant dropdown and `logo_1` loads an
 initial image without creating a Select entity. All Selects offer the shared
-image list.
+image list. The English image names and paths are illustrative; existing image
+names and SD filenames remain valid. When adopting these updated examples on a
+running device, place the files at the shown paths and update any Home Assistant
+automations that use the previous Select option names.
 
 ### Reuse one SD image at different widget sizes
 
@@ -350,7 +353,7 @@ unused space shows the widget background. Two widgets can select the same image
 name and SD path at different sizes. They share one decoded RGB565 buffer in the
 PSRAM cache, and LVGL scales that buffer separately while drawing each widget.
 The [FNK0104S example](examples/fnk0104s-esp-idf.yaml) includes an
-`image_fit_demo_page` with 320 × 300 and 160 × 120 widgets using `Bild 1`.
+`image_fit_demo_page` with 320 × 300 and 160 × 120 widgets using `Image 1`.
 When `fit` is configured, the component enables LVGL's RGB565A8 software
 transform support automatically. Rebuild and flash the firmware after adding
 `fit`; replacing an SD image alone cannot change this compile-time setting.
@@ -397,7 +400,7 @@ current image name as a read-only Home Assistant sensor instead of a dropdown:
 
 ```yaml
       - image_widget: sd_display_image
-        initial_image: Bild 1
+        initial_image: Image 1
         select:
           id: sd_display_image_select
           name: Display image
@@ -429,7 +432,7 @@ For the standard example, an automation's action is:
 ```yaml
 action: esphome.fnk0104s_sd_server_cyd_sd_set_sd_display_image
 data:
-  option: Bild 2
+  option: Image 2
 ```
 
 In HA's automation editor, select **Perform action**, choose the device's
@@ -514,7 +517,7 @@ is initialized and cached in exactly the same way but creates no unnecessary
 Home Assistant entity. `image_widget` IDs must be unique.
 
 The source becomes a decoded PSRAM descriptor when caching succeeds, or a
-mapped SD path such as `S:/Bild1.jpg` in streaming fallback mode. Home Assistant
+mapped SD path such as `S:/Image1.jpg` in streaming fallback mode. Home Assistant
 only sends a selected option; it never supplies an arbitrary path. The former
 single-widget `display_image` schema remains accepted for existing YAML, but
 new configurations should use `display_images`.

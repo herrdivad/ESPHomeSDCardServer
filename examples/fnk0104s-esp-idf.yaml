@@ -79,10 +79,12 @@ cyd_sd_http_server:
       memory: psram
       strategy: lru
     images:
-      - name: Bild 1
-        path: /Bild1.jpg
-      - name: Bild 2
-        path: /images/Bild2.jpg
+      # Match these paths to files on the SD card. Changing the names also
+      # changes Select options used by Home Assistant automations.
+      - name: Image 1
+        path: /Image1.jpg
+      - name: Image 2
+        path: /images/Image2.jpg
       # Four prepared 160x240 RGB565 BIN files for the portrait 2x2 logo page.
       - name: Logo 1
         path: /icons/logo1.bin
@@ -95,7 +97,7 @@ cyd_sd_http_server:
     widgets:
       # Dynamic widget: gets its own Select entity in Home Assistant.
       - image_widget: sd_display_image
-        initial_image: Bild 1
+        initial_image: Image 1
         select:
           id: sd_display_image_select
           name: Display image
@@ -116,10 +118,10 @@ cyd_sd_http_server:
       # Rebuild firmware after enabling fit; the RGB565 transform needs
       # RGB565A8 software support, which this component enables automatically.
       - image_widget: large_fit_preview
-        initial_image: Bild 1
+        initial_image: Image 1
         fit: contain
       - image_widget: small_fit_preview
-        initial_image: Bild 1
+        initial_image: Image 1
         fit: contain
 
 # Display bus of the FNK0104S.

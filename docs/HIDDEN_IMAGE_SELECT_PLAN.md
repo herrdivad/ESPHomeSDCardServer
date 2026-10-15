@@ -1,6 +1,6 @@
-# Plan: Bildsteuerung mit verstecktem Select
+# Plan: Image control with a hidden Select
 
-Stand: 2026-10-09. **Historical design plan; implementation now available.**
+Status: 2026-10-09. **Historical design plan; implementation now available.**
 
 The implemented configuration and migration instructions are documented in the
 [README](../README.md#hidden-image-selects-text-status-and-ha-automations).
@@ -10,191 +10,190 @@ in `image_select.cpp`. The maintainer reported a successful physical-device test
 of the hidden image Select and HA image action on 2026-10-10; remaining checks
 are tracked in [the hardware test matrix](HARDWARE_TEST_MATRIX.md).
 
-Ziel ist eine dritte, pro LVGL-Bild-Widget wählbare Betriebsart. Der Nutzer
-konfiguriert weiterhin `select:` mit einer zusätzlichen booleschen Option
-`hidden`. Home Assistant zeigt den aktuellen Bildnamen als ausschließlich
-lesbaren Textstatus; Bildwechsel erfolgen über eine Aktion im HA-Automationseditor.
-Diese Bedeutung von „Text Entry“ wurde vom Nutzer bestätigt.
+The goal was a third operating mode selectable for each LVGL image widget. The
+user would still configure `select:`, with an additional Boolean `hidden` option.
+Home Assistant would show the current image name as read-only text status; an
+action in the HA automation editor would change the image. The user confirmed
+this meaning of “Text Entry.”
 
-| Konfiguration | Darstellung in Home Assistant | Bildwechsel |
+| Configuration | Home Assistant representation | Image changes |
 | --- | --- | --- |
-| Ohne `select:` | Keine Bild-Entität | Bisheriges statisches Startbild |
-| `select:` ohne `hidden` oder mit `hidden: false` | Bisheriges Dropdown | Dropdown und bestehende Automationen |
-| `select:` mit `hidden: true` | Textstatus als `sensor.*`, kein Dropdown | Neue ESPHome-API-Aktion |
+| No `select:` | No image entity | Existing static initial image |
+| `select:` without `hidden` or with `hidden: false` | Existing dropdown | Dropdown and existing automations |
+| `select:` with `hidden: true` | Text status as `sensor.*`, no dropdown | New ESPHome API action |
 
-`hidden` ist eine neue Option dieser Komponente. Sie ist kein allgemeiner
-ESPHome- oder Home-Assistant-Schalter. Alle drei Betriebsarten dürfen auf
-demselben Gerät gleichzeitig vorkommen und teilen weiterhin Bildliste und Cache.
+`hidden` is an option of this component, not a general ESPHome or Home Assistant
+switch. All three modes may coexist on one device and continue to share the image
+list and cache.
 
-Ein ausgeblendetes HA-Select allein erfüllt das Ziel nicht: Es bleibt ein
-bedienbares Select. Vorgesehen sind deshalb ein internes ESPHome-Select, ein
-separater Textsensor und eine API-Aktion. Interne ESPHome-Entitäten werden nicht
-an HA veröffentlicht; siehe die [ESPHome-Entitätsoptionen](https://esphome.io/components/text_sensor/).
+Simply hiding an HA Select would leave a controllable Select. The proposal
+therefore uses an internal ESPHome Select, a separate text sensor, and an API
+action. Internal ESPHome entities are not published to HA; see the
+[ESPHome entity options](https://esphome.io/components/text_sensor/).
 
-Die Aktion ist auch in Skripten und manuell aufrufbar. „Nur Automationen“ meint
-hier den vorgesehenen Bedienweg ohne Select-Bedienelement, keine technische
-Zugriffssperre gegen manuelle Aktionsaufrufe. HA verwendet dieselben Aktionen
-für verschiedene Aufrufwege; siehe [HA-Aktionen](https://www.home-assistant.io/docs/scripts/perform-actions/).
+The action can also be called manually or from scripts. “Automations only”
+describes the intended control path without a Select control; it is not a
+technical restriction on manual action calls. HA uses the same actions for
+different call paths; see [HA actions](https://www.home-assistant.io/docs/scripts/perform-actions/).
 
-## Geplante YAML-Oberfläche
+## Proposed YAML interface
 
-Dieses Fragment beschreibt die geplante Erweiterung und ist mit dem aktuellen
-Komponentenstand noch nicht gültig. LVGL-Widget und übrige Gerätekonfiguration
-werden wie bisher separat angelegt.
+This fragment described the proposed extension and was not valid with the
+component version at the time. The LVGL widget and remaining device
+configuration were created separately, as before.
 
 ```yaml
 api:
-  # Bestehende API-Konfiguration einschließlich Verschlüsselung beibehalten.
+  # Preserve the existing API configuration, including encryption.
 
 cyd_sd_http_server:
   display_images:
     images:
-      - name: Tag
-        path: /images/tag.bin
-      - name: Nacht
-        path: /images/nacht.bin
+      - name: Day
+        path: /images/day.bin
+      - name: Night
+        path: /images/night.bin
     widgets:
       - image_widget: sd_display_image
-        initial_image: Tag
+        initial_image: Day
         select:
           id: sd_display_image_select
           name: Display image
           hidden: true
 ```
 
-- `hidden` liegt innerhalb von `select:` und hat den Standardwert `false`.
-- Dieselbe Erweiterung gilt für die bestehende Singularform `display_image`.
-- `id` bleibt die ID eines echten ESPHome-Selects. Lokale Referenzen und
-  Select-Automationen bleiben damit verwendbar.
-- Bei `hidden: true` wird dieses Select intern gehalten. Die Komponente erzeugt
-  automatisch einen externen Textsensor mit dem konfigurierten Anzeigenamen.
-  Kein zusätzlicher `text_sensor:`-Block ist nötig.
-- Der Textsensor erhält eine eigene, deterministisch aus der Widget-ID abgeleitete
-  ID. Anzeigename und Icon werden übernommen; Select-Callbacks verbleiben am
-  Select. Die Behandlung weiterer Entitätsoptionen wird explizit implementiert
-  und getestet, statt die gesamte Select-Konfiguration auf den Sensor zu kopieren.
-- Für den neuen Modus ist `api:` erforderlich. Bestehende Konfigurationen ohne
-  verstecktes Select erhalten keine neue API-Pflicht.
-- `hidden` ist eine Firmware-Konfiguration, kein zur Laufzeit schaltbarer Modus.
+- `hidden` belongs inside `select:` and defaults to `false`.
+- The extension also applies to the existing singular `display_image` form.
+- `id` remains the ID of a real ESPHome Select, so local references and Select
+  automations remain usable.
+- With `hidden: true`, this Select remains internal. The component automatically
+  creates an external text sensor with the configured display name. No additional
+  `text_sensor:` block is required.
+- The text sensor gets its own ID, deterministically derived from the widget ID.
+  Its display name and icon are copied; Select callbacks stay on the Select.
+  Other entity options are handled and tested explicitly instead of copying the
+  entire Select configuration to the sensor.
+- The new mode requires `api:`. Existing configurations without a hidden Select
+  gain no new API requirement.
+- `hidden` is firmware configuration, not a mode that can be changed at runtime.
 
-## Bedienung in Home Assistant
+## Using it in Home Assistant
 
-Pro verstecktem Widget wird automatisch eine Aktion mit genau einem Textparameter
-`option` angelegt. Vorgesehener Aktionsname auf ESPHome-Seite:
-`cyd_sd_set_<image_widget_id>`. Die explizite Widget-ID liefert eine stabile
-Zuordnung, auch wenn Select-IDs automatisch erzeugt werden.
+Each hidden widget automatically gets an action with one text parameter,
+`option`. The proposed ESPHome-side action name is
+`cyd_sd_set_<image_widget_id>`. The explicit widget ID provides a stable
+association even when Select IDs are generated automatically.
 
-Für einen beispielhaften Gerätenamen `display_panel` ergibt sich:
+For an example device named `display_panel`:
 
 ```yaml
-# Geplanter HA-Aktionsaufruf innerhalb einer Automation:
+# Proposed HA action call inside an automation:
 action: esphome.display_panel_cyd_sd_set_sd_display_image
 data:
-  option: Nacht
+  option: Night
 ```
 
-Der tatsächliche HA-Aktionsname ist nach der Geräteerkennung zu prüfen.
-ESPHome veröffentlicht benutzerdefinierte API-Aktionen für HA und unterstützt
-Textparameter; siehe [Native API: User-defined Actions](https://esphome.io/components/api/#user-defined-actions).
+The actual HA action name must be checked after device discovery. ESPHome
+publishes user-defined API actions to HA and supports text parameters; see
+[Native API: User-defined Actions](https://esphome.io/components/api/#user-defined-actions).
 
-Im HA-Automationseditor legt der Nutzer beispielsweise einen Zeit-, Temperatur-
-oder Lichtauslöser an, wählt unter „Aktion ausführen“ die betreffende ESPHome-Aktion
-und trägt den Bildnamen ein. Für unterschiedliche Zustände können „Auswahl“/`choose`
-oder Templates genutzt werden. Eine neue Bildauswahl-Entität entsteht dadurch
-nicht. Die erste Umsetzung verspricht keinen automatisch erzeugten Dropdown mit
-Bildnamen im Aktionsformular; `option` ist ein Textfeld.
+In the HA automation editor, a user could create a time, temperature, or light
+trigger, select the relevant ESPHome action under “Perform action,” and enter an
+image name. `choose` or templates could handle different states. This creates
+no new image selection entity. The first implementation did not promise an
+automatically generated dropdown of image names in the action form; `option`
+is a text field.
 
-Temperaturgrenzen und Helligkeitsschwellen sollten bei Bedarf getrennte Ein- und
-Ausschaltwerte erhalten. Für eine sofort korrekte Anzeige nach Neustart oder
-Wiederverbindung kann die HA-Automation zusätzlich bei Geräteverfügbarkeit den
-aktuellen Zustand auswerten. Das Gerät selbst lädt weiterhin `initial_image`.
+Temperature and brightness thresholds should use separate on and off values
+when needed. To restore the correct image promptly after a restart or
+reconnection, the HA automation can also evaluate the current state when the
+device becomes available. The device itself still loads `initial_image`.
 
-## Umsetzungsschritte
+## Implementation steps
 
-1. **Schema und Codegenerierung erweitern**
-   - In `components/cyd_sd_http_server/__init__.py` ein gemeinsames Select-Schema
-     mit `hidden: false` für beide Bildkonfigurationen verwenden.
-   - Das vorhandene `CydSdImageSelect` in allen Select-Modi erhalten. Im neuen
-     Modus die interne Registrierung erzwingen und den Textsensor ergänzen.
-   - Textsensor-Unterstützung und API-Aktionsunterstützung nur für den neuen Modus
-     aktivieren. Den bisherigen reinen Dateiserver weiterhin ohne LVGL/API bauen.
-   - Fehlendes `api:`, ungültige Bool-Werte und Kollisionen erzeugter Sensor-IDs
-     oder Aktionsnamen mit verständlichen Validierungsfehlern abweisen.
-   - Widersprüchliche oder nicht übertragbare Entitätsoptionen nachvollziehbar
-     behandeln; bisher gültige YAML ohne `hidden: true` unverändert akzeptieren.
+1. **Extend the schema and code generation**
+   - Use a shared Select schema with `hidden: false` for both image configuration
+     forms in `components/cyd_sd_http_server/__init__.py`.
+   - Keep the existing `CydSdImageSelect` in every Select mode. In the new mode,
+     force internal registration and add the text sensor.
+   - Enable text sensor and API action support only for the new mode. Keep the
+     existing standalone file server buildable without LVGL or the API.
+   - Reject missing `api:`, invalid Boolean values, and generated sensor ID or
+     action name collisions with understandable validation errors.
+   - Handle conflicting or non-transferable entity options explicitly; continue
+     accepting previously valid YAML without `hidden: true` unchanged.
 
-2. **Status an den bestehenden Bildwechsel anbinden**
-   - `DisplayImageWidget` in `cyd_sd_http_server.h` um einen optionalen
-     Textsensor-Verweis ergänzen.
-   - In `select_image()` den zugewiesenen Bildnamen zusätzlich an diesen Sensor
-     veröffentlichen, sobald der bestehende Auswahlvorgang erfolgreich ist.
-   - Startbild, lokale Select-Steuerung und API-Aktion nutzen denselben Pfad.
-     Kein optimistischer Statuswechsel vor erfolgreicher Zuweisung.
-   - Unbekannte Optionen, fehlende Dateien und erkannte Speicherzugriffskonflikte
-     lassen Bild und Status unverändert. Scheitert bereits das Startbild, bleibt
-     der Sensor ohne bestätigten Wert; kein erfundener erfolgreicher Bildname.
-   - Der Status bestätigt die vom Controller vorgenommene Quellenzuweisung.
-     Die aktuelle Streaming-Implementierung garantiert keine spätere vollständige
-     Decodierung: Eine existierende, beschädigte Datei kann erst beim Rendern
-     scheitern. Diese Grenze nicht als erfolgreich geprüfte Darstellung ausgeben.
+2. **Connect status to the existing image change path**
+   - Add an optional text sensor reference to `DisplayImageWidget` in
+     `cyd_sd_http_server.h`.
+   - In `select_image()`, publish the assigned image name to this sensor after
+     the existing selection process succeeds.
+   - Use the same path for the initial image, local Select control, and API
+     action. Do not change status optimistically before successful assignment.
+   - Unknown options, missing files, and detected storage access conflicts leave
+     the image and status unchanged. If the initial image fails, the sensor has
+     no confirmed value; do not claim that an image loaded successfully.
+   - Status confirms the source assignment made by the controller. The current
+     streaming implementation cannot guarantee complete subsequent decoding:
+     an existing corrupt file may fail only during rendering. Do not describe
+     this status as confirmation that the image rendered successfully.
 
-3. **API-Aktion automatisch registrieren**
-   - Einen kleinen Adapter pro verstecktem Widget vorsehen, der `option` gegen die
-     vorhandenen Select-Optionen prüft und den bestehenden Select-Steuerpfad nutzt.
-     Nur freigegebene Bildnamen akzeptieren, niemals beliebige Dateipfade.
-   - Im vorhandenen ESPHome/LVGL-Ausführungskontext bleiben. Keine zusätzliche
-     SD-Zugriffsschicht und keine HTTP-Anfragen für Bildwechsel einführen.
-   - Die lokal installierte Zielversion ESPHome 2026.8.0 bietet
-     `api::CustomAPIDevice::register_service()`. Dieser Weg benötigt
-     `USE_API_USER_DEFINED_ACTIONS` und `USE_API_CUSTOM_SERVICES`.
-     Die Komponente soll diese Unterstützung bedingt selbst aktivieren, damit
-     außer `hidden: true` keine manuell geschriebenen API-Aktionen oder Lambdas
-     nötig sind. Das Zusammenspiel mit vorhandenen `api.actions` im Build prüfen.
-   - Bei diesem Adapter sind Aktionsaufrufe ohne Ergebnisantwort. Fehler werden
-     geloggt; der Textsensor bestätigt die angenommene Auswahl. Ein erfolgreicher
-     HA-Aufruf allein bestätigt keinen erfolgreichen Bildwechsel.
-   - Registrierung einmalig vor der API-Erkennung durchführen. Wiederverbindung
-     darf keine zusätzlichen Aktionen oder Entitäten erzeugen.
+3. **Register the API action automatically**
+   - Add a small adapter for each hidden widget. It checks `option` against the
+     existing Select options and uses the existing Select control path. Accept
+     only allowed image names, never arbitrary file paths.
+   - Stay in the existing ESPHome/LVGL execution context. Do not introduce
+     another SD access layer or HTTP requests for image changes.
+   - The locally installed target version, ESPHome 2026.8.0, provides
+     `api::CustomAPIDevice::register_service()`. This path requires
+     `USE_API_USER_DEFINED_ACTIONS` and `USE_API_CUSTOM_SERVICES`. The component
+     should enable this support conditionally, so `hidden: true` needs no
+     manually written API actions or lambdas. Check the build alongside existing
+     `api.actions`.
+   - Action calls through this adapter have no result response. Errors are
+     logged, and the text sensor confirms an accepted selection. A successful
+     HA call alone does not confirm a successful image change.
+   - Register once before API discovery. Reconnection must not create more
+     actions or entities.
 
-4. **Dokumentation und Beispiele ergänzen**
-   - README und `docs/DIRECT_SD_IMAGE_WORKFLOW.md` um die drei Betriebsarten,
-     den HA-Aktionsaufruf und die Fehler-/Neustartsemantik erweitern.
-   - Ein Beispiel mit statischem, sichtbarem und verstecktem Widget ergänzen;
-     vorhandene Beispiele und Bedienmöglichkeiten erhalten.
-   - HA-Beispiele für Tageszeit und temperaturabhängige Auswahl dokumentieren.
+4. **Extend documentation and examples**
+   - Document the three modes, HA action call, and error and restart behavior in
+     the README and `docs/DIRECT_SD_IMAGE_WORKFLOW.md`.
+   - Add an example with a static, visible, and hidden widget while retaining
+     existing examples and controls.
+   - Document HA examples for time of day and temperature-based selection.
 
-## Kompatibilität und Umstellung
+## Compatibility and migration
 
-Bestehende Konfigurationen behalten mit dem Standard `hidden: false` ihr Verhalten.
-Gemeinsame Allowlist, zentrale Pfadprüfung, SD-Synchronisierung, PSRAM-Cache,
-Streaming-Fallback, Uploads und Downloads bleiben erhalten. Erneute Auswahl
-desselben Bildnamens muss weiterhin das Nachladen einer ersetzten Datei erlauben.
+Existing configurations retain their behavior with the default `hidden: false`.
+The shared allowlist, centralized path validation, SD synchronization, PSRAM
+cache, streaming fallback, uploads, and downloads remain available. Selecting
+the same image name again must still reload a replaced file.
 
-Beim bewussten Wechsel eines vorhandenen Widgets auf `hidden: true` entfällt dessen
-externes `select.*`; stattdessen entsteht ein `sensor.*`. Das ist ein Wechsel der
-HA-Entitätsart. Bestehende Automationen mit `select.select_option` müssen für dieses
-Widget auf die neue Aktion umgestellt werden. Verwaiste HA-Registry-Einträge können
-eine manuelle Bereinigung benötigen. Stabile Firmware-IDs garantieren keine
-identische HA-Entitäts-ID über diesen Domänenwechsel hinweg. Der Rückwechsel auf
-`hidden: false` muss ebenfalls geprüft und dokumentiert werden.
+When an existing widget is deliberately changed to `hidden: true`, its external
+`select.*` is replaced by a `sensor.*`. This changes the HA entity domain.
+Existing `select.select_option` automations for that widget must migrate to the
+new action. Orphaned HA registry entries may need manual cleanup. Stable
+firmware IDs do not guarantee the same HA entity ID across this domain change.
+Changing back to `hidden: false` also needs testing and documentation.
 
-## Abnahme und Prüfungen bei späterer Implementierung
+## Acceptance checks for the later implementation
 
-- Schema/Codegenerierung: fehlendes und explizit falsches `hidden`, neuer Modus,
-  Mischbetrieb, Singularform, fehlende API sowie Namenskollisionen abdecken.
-- Verhalten: richtige Widget-Zuordnung, erlaubte/unbekannte Namen, fehlende/busy
-  Dateien, Startfehler, erneute Auswahl und übereinstimmenden Status testen.
-- Vorhandene lokale Select-Referenzen und Callbacks auch im internen Modus prüfen.
-- Host-Syntaxtests erfassen derzeit den LVGL/API-Zweig nicht vollständig; passende
-  Testunterstützung ergänzen und nicht als Ersatz für den Firmware-Build behandeln.
-- Hosttests, `esphome config`, `compile --only-generate` und vollständigen Build
-  mit ESPHome 2026.8.0 / ESP-IDF 5.5.5 ausführen. Sowohl bisherige Konfigurationen
-  als auch eine neue Mischkonfiguration prüfen.
-- An einem ausdrücklich vorgesehenen Gerät mit HA prüfen: Textstatus ohne
-  Dropdown, Aktionsformular im UI, tatsächlicher Bildwechsel, unabhängige Widgets,
-  Wiederverbindung, Moduswechsel sowie unveränderte Web- und Cache-Funktionen.
-  Hardwareergebnisse getrennt von Host-/Build-Ergebnissen festhalten.
+- Schema and code generation: cover absent and explicitly false `hidden`, the
+  new mode, mixed mode, singular form, missing API, and name collisions.
+- Behavior: test correct widget association, allowed and unknown names, missing
+  and busy files, initial image failures, repeated selection, and matching status.
+- Check existing local Select references and callbacks in internal mode too.
+- Host syntax tests do not yet fully cover the LVGL/API branch; add suitable
+  test support and do not treat it as a replacement for a firmware build.
+- Run host tests, `esphome config`, `compile --only-generate`, and a full build
+  with ESPHome 2026.8.0 / ESP-IDF 5.5.5. Check both previous configurations and
+  a new mixed configuration.
+- On an explicitly intended device with HA, check text status without a
+  dropdown, the action form in the UI, actual image changes, independent
+  widgets, reconnection, mode switching, and unchanged web and cache behavior.
+  Record hardware results separately from host and build results.
 
-Dieser Plan umfasst keine Implementierung und keine Hardwareänderung. Technische
-Grundlage sind der aktuelle Repository-Code und die lokal installierten
-ESPHome-2026.8.0-Quellen; die verlinkte Onlinedokumentation kann neuer sein.
+This plan covered no implementation or hardware change. Its technical basis was
+the repository code and locally installed ESPHome 2026.8.0 sources at the time;
+the linked online documentation may be newer.

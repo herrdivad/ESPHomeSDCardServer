@@ -109,7 +109,7 @@ file operations. Existing configurations must not require migration.
 ### Required Home Assistant interaction
 
 - Provide a configurable ESPHome Button entity exposed in the Home Assistant GUI,
-  with a user-facing name such as `Bilderliste aktualisieren`.
+  with a user-facing name such as `Refresh image list`.
 - Pressing this button rescans the configured directories and wildcard sources,
   adds newly discovered compatible images to the shared library, and updates the
   options of all configured image Selects in Home Assistant.
@@ -174,7 +174,7 @@ Implemented in commit `70f00cd` (direct SD image workflow and HA Select):
 - `SdStorage` is shared by HTTP downloads and the read-only LVGL file-system
   driver, including open, read, absolute seek, tell, close, active-reader
   tracking, and conflict handling;
-- LVGL reads allow-listed paths such as `S:/Bild1.jpg` directly from the mounted
+- LVGL reads allow-listed paths such as `S:/Image1.jpg` directly from the mounted
   SD card without the local HTTP/`online_image` loop;
 - baseline JPEG uses LVGL's incremental Tiny JPEG decoder, and LVGL 9.5 BIN
   images are accepted;
@@ -231,8 +231,8 @@ boot log confirms that the component allocated and used a 307,200-byte RGB565
 frame inside the configured 1,000,000-byte PSRAM budget:
 
 ```text
-Decoded image cached path=/Bild1.jpg bytes=307200 duration_ms=277
-Display image selected: Bild 1 (PSRAM cache MISS, 307200/1000000 bytes)
+Decoded image cached path=/Image1.jpg bytes=307200 duration_ms=277
+Display image selected: Image 1 (PSRAM cache MISS, 307200/1000000 bytes)
 Decoded image cache: 307200/1000000 bytes in PSRAM (1 entries)
 ```
 
@@ -383,7 +383,7 @@ the mapped SD file can be opened, retains the LVGL source for its required
 lifetime, and leaves the previous image and selection intact on failure. Cache
 retention and eviction were added in commit `894a46d`.
 
-The old conceptual `set_lvgl_image_path("S:/Bild1.jpg")` example was not a
+The old conceptual `set_lvgl_image_path("S:/Image1.jpg")` example was not a
 public arbitrary-path API. Runtime selection remains restricted to the compiled
 allow-list. Arbitrary user-supplied paths are a separate, unimplemented feature
 that would require the same path and reserved-name checks.
