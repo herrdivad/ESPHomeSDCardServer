@@ -1,5 +1,9 @@
 > **Disclaimer — origin, AI-generated code, and scope**
 >
+> This is an independent, community-developed open-source project.
+> It is not affiliated with, endorsed by, or officially supported by the Home Assistant or ESPHome projects.
+> All respective trademarks belong to their owners.
+>
 > This project was inspired by the idea behind
 > [n-serrette/esphome_sd_card](https://github.com/n-serrette/esphome_sd_card),
 > but was rewritten from scratch, with approximately 99% of the code generated
