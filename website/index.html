@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en" id="top">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESPHome SD Card Server — Files, images, and your display</title>
+  <meta name="description" content="A browser SD file manager and direct SD-to-LVGL image component for ESPHome on the Freenove FNK0104S. Explore features, real screenshots, setup, and hardware test status.">
+  <meta name="theme-color" content="#1b1d21">
+  <meta property="og:title" content="ESPHome SD Card Server">
+  <meta property="og:description" content="Your SD card. In the browser. On your display. An independent ESPHome component for the FNK0104S.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://herrdivad.github.io/ESPHomeSDCardServer/">
+  <link rel="canonical" href="https://herrdivad.github.io/ESPHomeSDCardServer/">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/styles.css">
+  <script src="assets/site.js" defer></script>
+</head>
+<body>
+  @@HEADER@@
+  <main id="main">
+    <section class="hero container" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> ESPHome external component</p>
+        <h1 id="hero-title">Your SD card.<br>In the browser.<br><span>On your display.</span></h1>
+        <p class="hero-description">Manage files over your LAN. Bring SD images straight to LVGL. Connect your display to Home Assistant, with one shared image library.</p>
+        <div class="button-row"><a class="button primary" href="guide.html#installation">Get started <span aria-hidden="true">↗</span></a><a class="button secondary" href="https://github.com/herrdivad/ESPHomeSDCardServer">Explore the code <span aria-hidden="true">↗</span></a></div>
+        <p class="hero-note">Open source · MIT licensed · FNK0104S / ESP32-S3R8</p>
+      </div>
+      <figure class="hero-shot">
+        <div class="frame-label"><span><span class="status-dot" aria-hidden="true"></span> THE WEB FILE MANAGER</span><span>01 / WEB UI</span></div>
+        <a class="screenshot-link" href="assets/en-dark-1040.png" data-lightbox data-caption="Owned and/or created by the maintainer; any AI-assisted work was created under the maintainer's direction. Original repository screenshot: the English desktop web file manager. Filenames are user content."><img src="assets/en-dark-1040.png" alt="Original English web file manager showing API key access, upload controls, a directory, and file download and delete actions." width="1040" height="1199" fetchpriority="high"></a>
+        <figcaption>Screenshot by the maintainer <span>Click to enlarge ↗</span></figcaption>
+      </figure>
+    </section>
+    <div class="environment-strip"><div class="container environment-items"><p><span>Target board</span>Freenove FNK0104S</p><p><span>Reference release</span>ESPHome 2026.8.0</p><p><span>Framework</span>ESP-IDF 5.5.5</p><p><span>Storage & memory</span>4-bit SDMMC · 8 MB PSRAM</p></div></div>
+
+    <section class="section container" id="features" aria-labelledby="features-title">
+      <div class="section-heading"><p class="eyebrow">A small component. A useful connection.</p><h2 id="features-title">From files on a card<br>to images in your home.</h2><p>A dedicated file service and an optional display layer, built around the same synchronized SD storage.</p></div>
+      <div class="feature-grid">
+        <article class="feature-card"><span class="feature-number">01 / FILES</span><h3>Your card, in a browser</h3><p>Upload and download files, browse folders, create directories, and delete files or empty folders. An embedded UI offers English and German, with light and dark themes.</p><a href="#in-action">See the interface <span aria-hidden="true">↗</span></a></article>
+        <article class="feature-card"><span class="feature-number">02 / DISPLAY</span><h3>SD straight to LVGL</h3><p>Render baseline JPEG and compatible LVGL BIN assets through a read-only <code>S:</code> drive. Use multiple image widgets, independent selections, and optional scaling.</p><a href="guide.html#images">Explore image configuration <span aria-hidden="true">↗</span></a></article>
+        <article class="feature-card"><span class="feature-number">03 / CONTROL</span><h3>Part of your smart home</h3><p>Expose an image dropdown per widget, use text status with a Home Assistant action, or keep widgets static. Native PSRAM diagnostics make the cache visible in HA.</p><a href="guide.html#home-assistant">Connect the controls <span aria-hidden="true">↗</span></a></article>
+      </div>
+      <div class="details-row"><p><strong>8 KiB transfers</strong><span>Bounded streaming on the device</span></p><p><strong>Separate HTTP service</strong><span>SD files on 8080, ESPHome web on 80</span></p><p><strong>Normal ESPHome OTA</strong><span>File uploads stay separate from firmware</span></p></div>
+    </section>
+
+    <section class="architecture-band" aria-labelledby="architecture-title"><div class="container section">
+      <div class="section-heading"><p class="eyebrow">Under the surface</p><h2 id="architecture-title">One card. Shared storage.<br>Two ways to use it.</h2></div>
+      <div class="architecture" role="img" aria-label="Browser and HTTP API connect to shared SD storage. SD storage supplies LVGL through its S drive and optional PSRAM cache. Home Assistant controls widget selections through the ESPHome API.">
+        <div class="architecture-box"><span class="diagram-tag">TRANSFER</span><h3>Browser / HTTP API</h3><p>Upload · download · folders</p><code>:8080/sd/</code></div><span class="diagram-arrow" aria-hidden="true">↔</span>
+        <div class="architecture-box architecture-core"><span class="diagram-tag">SHARED STORAGE</span><h3>SD card</h3><p>FAT32 over SDMMC</p><code>/sdcard</code></div><span class="diagram-arrow" aria-hidden="true">→</span>
+        <div class="architecture-box"><span class="diagram-tag">DISPLAY</span><h3>LVGL + PSRAM</h3><p>Direct reads · decoded cache</p><code>S:/images/photo.jpg</code></div>
+      </div>
+      <p class="diagram-caption">Architecture diagram · Home Assistant changes allow-listed image selections through the ESPHome API. The direct display path does not make a local HTTP round trip.</p>
+    </div></section>
+
+    <section class="section container" id="images" aria-labelledby="images-title">
+      <div class="split-heading"><div><p class="eyebrow">Less duplication. More display.</p><h2 id="images-title">One image.<br>Every widget.</h2></div><p>Widgets displaying the same SD path share one decoded RGB565 buffer. LVGL draws that source at each widget’s size with <code>contain</code>, <code>cover</code>, or <code>stretch</code>.</p></div>
+      <div class="cache-layout"><div class="cache-stat"><span class="eyebrow">Default decoded cache budget</span><strong>1<span>MB</span></strong><p>Allocated on demand in PSRAM.<br>Configurable from 0 to 4 MB.</p></div><div class="rule-list"><div><h3>Cache what you use</h3><p>LRU eviction releases inactive frames. Images still assigned to widgets remain protected, including widgets on hidden pages.</p></div><div><h3>Choose the right fallback</h3><p>Unscaled widgets can stream from SD when caching fails. Fitted widgets need a decoded cache entry and keep their previous image if it cannot be created.</p></div><div><h3>Know the memory cost</h3><p>A 320 × 480 RGB565 source uses 307,200 bytes. Drawing it smaller does not shrink that allocation or eliminate scaling work.</p></div></div></div>
+      <a class="text-link" href="guide.html#caching">Read the cache and scaling details <span aria-hidden="true">↗</span></a>
+    </section>
+
+    <section class="section section-divided container" id="in-action" aria-labelledby="screenshots-title">
+      <div class="section-heading"><p class="eyebrow">From the real setup</p><h2 id="screenshots-title">Real hardware.<br>A closer look.</h2><p>The example screenshots and photos are owned and/or created by the maintainer. Any AI-assisted work was created under the maintainer’s direction. Open any image at its original resolution.</p></div>
+      <div class="hardware-showcase">
+        <figure class="hardware-shot"><div class="frame-label"><span>THE PHYSICAL DISPLAY</span><span>04 / HARDWARE</span></div><a class="screenshot-link" href="assets/ESPHome-SDWebAndImageServer.jpg" data-lightbox data-caption="Owned and/or created by the maintainer; any AI-assisted work was created under the maintainer's direction. Real device photograph: the display shows six image-backed dashboard tiles with room labels and temperatures. German labels, artwork, and readings belong to this particular setup; this is not a bundled temperature dashboard."><img src="assets/ESPHome-SDWebAndImageServer.jpg" alt="Real mounted touchscreen displaying a two-by-three grid of illustrated dashboard tiles with German room labels and temperature readings." width="1980" height="1493" loading="lazy"></a><figcaption>Real photograph by the maintainer · click to enlarge ↗</figcaption></figure>
+        <div class="hardware-copy"><p class="eyebrow">Pixels on the real display</p><h3>Beyond the browser.</h3><p>The maintainer’s physical setup brings image-backed tiles, labels, and temperature readings together on one display.</p><p class="small muted">This photograph documents a custom dashboard. Its sensor data, artwork, and complete layout are not supplied by the SD server component or reproduced by the reference YAML.</p></div>
+      </div>
+      <div class="showcase-grid"><div>
+        <figure class="ha-shot"><div class="frame-label"><span>HOME ASSISTANT</span><span>02 / CONTROLS</span></div><a class="screenshot-link" href="assets/HA-Example1.png" data-lightbox data-caption="Owned and/or created by the maintainer; any AI-assisted work was created under the maintainer's direction. Original repository Home Assistant dashboard example. It includes display image and weather icon Selects alongside unrelated dashboard controls. Labels and option names are from the original setup."><img src="assets/HA-Example1.png" alt="Original Home Assistant dashboard with separate Display image and Weather icon dropdowns, plus other dashboard controls." width="876" height="556" loading="lazy"></a><figcaption>Independent image Selects in Home Assistant · screenshot by the maintainer</figcaption></figure>
+        <div class="showcase-copy"><h3>Your display, your controls.</h3><p>A visible dropdown for manual selection, a hidden Select with read-only status and an action for automations, or a static image with no HA entity. All three modes can coexist.</p><a class="text-link" href="guide.html#home-assistant">Set up Home Assistant controls ↗</a><p class="small muted">The original HA screenshot contains German labels and unrelated dashboard controls. The mobile screenshot shows the original German WebUI.</p></div>
+      </div><figure class="mobile-shot"><div class="frame-label"><span>MOBILE WEB UI</span><span>03</span></div><a class="screenshot-link" href="assets/de-dark-375.png" data-lightbox data-caption="Owned and/or created by the maintainer; any AI-assisted work was created under the maintainer's direction. Original repository screenshot: the German web file manager at 375 pixels wide. The site preserves the supplied screenshot without translating or recreating it."><img src="assets/de-dark-375.png" alt="Original German mobile web file manager with stacked upload controls and file actions at 375 pixels wide." width="375" height="1630" loading="lazy"></a><figcaption>Responsive file management<br>Screenshot by the maintainer · original German UI<br>Click to enlarge ↗</figcaption></figure></div>
+    </section>
+
+    <section class="start-band" id="get-started" aria-labelledby="start-title"><div class="container section">
+      <div class="split-heading"><div><p class="eyebrow">Make the connection</p><h2 id="start-title">Start with the<br>working example.</h2></div><p>The full FNK0104S configuration includes display wiring, LVGL widgets, a compile-time placeholder, and the image mappings. Keep the documented target setup.</p></div>
+      <ol class="steps"><li><span>01</span><h3>Get the files</h3><p>Download the repository. Keep <code>components/</code>, the device YAML, and its <code>assets/</code> together.</p></li><li><span>02</span><h3>Add your secrets</h3><p>Copy the secret template. Set Wi-Fi credentials and a random API key of at least 32 UTF-8 bytes.</p></li><li><span>03</span><h3>Build. Upload. Display.</h3><p>Validate and flash with ESPHome. Open the device’s file manager, provision your SD images, then select or restart.</p></li></ol>
+      <div class="start-bottom"><a class="button primary" href="guide.html#installation">Installation guide <span aria-hidden="true">↗</span></a><a class="text-link" href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/examples/fnk0104s-esp-idf.yaml">View full device YAML ↗</a></div>
+    </div></section>
+
+    <section class="section container" id="status" aria-labelledby="status-title">
+      <div class="section-heading"><p class="eyebrow">Know what you’re building on</p><h2 id="status-title">Implemented. Tested.<br>Still to explore.</h2><p>Implementation is verified against the component source. Hardware results below are maintainer reports for the FNK0104S, not independent testing or a claim of universal support.</p></div>
+      <div class="status-grid"><article class="status-card"><span class="pill tested">Hardware tested</span><h3>Basic operation confirmed</h3><ul><li>Web uploads, downloads, folders, and deletion</li><li>SD image display, memory usage, and HA Selects</li><li>Hidden image status/action and fitted image scaling (October 10, 2026)</li><li>HA PSRAM diagnostics and unused-cache release, including assigned images on hidden pages (October 12, 2026)</li></ul></article><article class="status-card"><span class="pill pending">Testing pending</span><h3>Failure and stress scenarios</h3><ul><li>Concurrent clients and conflicting operations</li><li>Operator mistakes and interrupted transfers</li><li>Power loss, SD corruption, and card failure</li><li>Reconnect, migration, stress, and endurance checks</li></ul><p>Staging, recovery, and reader protection are implemented safeguards; these do not establish proven recovery in every failure scenario.</p></article><article class="status-card"><span class="pill planned">Planned only</span><h3>Beyond the current scope</h3><ul><li>Directory / wildcard image sources</li><li>A Home Assistant image-library refresh button</li><li>Optional SD MP3 playback</li></ul><p>These are documented plans, not current features or delivery commitments. Image names and paths are currently compiled into firmware.</p></article></div>
+      <div class="status-source"><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/README.md#target-hardware-and-test-status">Current test summary ↗</a><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/docs/HARDWARE_TEST_MATRIX.md">Detailed hardware matrix ↗</a><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/future_patches.md">Roadmap and history ↗</a></div>
+      <aside class="notice"><strong>One documented hardware target. A trusted LAN only.</strong><p>Freenove FNK0104S / ESP32-S3R8 with four-bit SDMMC and octal PSRAM. Other boards, Arduino, SPI SD, hotplug, TLS, and public internet exposure are unsupported. PNG and progressive JPEG cannot render through the direct SD image path. FAT recovery cannot guarantee protection against power loss or card failure. Keep backups.</p></aside>
+    </section>
+
+    <section class="section section-divided container" id="documentation" aria-labelledby="docs-title">
+      <div class="split-heading"><div><p class="eyebrow">Go a little deeper</p><h2 id="docs-title">Built to be understood.</h2></div><p>Start with the practical guide, then follow the source documents for implementation details and test records.</p></div>
+      <div class="resource-grid"><a href="guide.html#installation"><span>01 / SETUP</span><h3>Installation & configuration</h3><p>Secrets, complete server YAML, flashing, and provisioning.</p><span aria-hidden="true">↗</span></a><a href="guide.html#api"><span>02 / INTEGRATION</span><h3>Security & HTTP API</h3><p>Authentication, endpoints, raw uploads, and the Python uploader.</p><span aria-hidden="true">↗</span></a><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/docs/DIRECT_SD_IMAGE_WORKFLOW.md"><span>03 / ARCHITECTURE</span><h3>The SD image workflow</h3><p>Widgets, the allow-list, storage, decoders, and shared caching.</p><span aria-hidden="true">↗</span></a><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/add_tools/README.md"><span>04 / TOOLING</span><h3>Prepare LVGL BIN assets</h3><p>Host-side conversion, resizing, and rotation with the optional converter.</p><span aria-hidden="true">↗</span></a></div>
+    </section>
+    <section class="final-cta"><div class="container"><p class="eyebrow">Files. Pixels. Possibilities.</p><h2>Give your SD card<br>a place in your setup.</h2><a class="button dark-button" href="https://github.com/herrdivad/ESPHomeSDCardServer">Explore on GitHub <span aria-hidden="true">↗</span></a></div></section>
+  </main>
+  @@FOOTER@@
+</body>
+</html>

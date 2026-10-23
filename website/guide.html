@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en" id="top">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Documentation — ESPHome SD Card Server</title>
+  <meta name="description" content="Install and configure the FNK0104S ESPHome SD Card Server. Learn about SD images, Home Assistant controls, PSRAM caching, the HTTP API, and security limits.">
+  <meta name="theme-color" content="#1b1d21">
+  <link rel="canonical" href="https://herrdivad.github.io/ESPHomeSDCardServer/guide.html">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/styles.css">
+  <script src="assets/site.js" defer></script>
+</head>
+<body>
+  @@HEADER@@
+  <main id="main" class="container guide-layout">
+    <aside class="guide-sidebar"><p class="eyebrow">The practical guide</p><nav aria-label="On this page"><a href="#installation">01 Installation</a><a href="#configuration">02 Configuration</a><a href="#images">03 SD images</a><a href="#home-assistant">04 Home Assistant</a><a href="#caching">05 Cache & scaling</a><a href="#api">06 HTTP API</a><a href="#security">07 Security & limits</a><a href="#troubleshooting">08 Troubleshooting</a><a href="#references">09 Source documents</a></nav><a class="sidebar-source" href="https://github.com/herrdivad/ESPHomeSDCardServer">Source on GitHub ↗</a></aside>
+    <article class="guide-content">
+      <header class="guide-intro"><p class="eyebrow">Documentation / FNK0104S</p><h1>From first build<br>to first image.</h1><p class="lead">A practical path through installation, file transfers, and optional display integration.</p><p>Reference environment: ESPHome 2026.8.0, ESP-IDF 5.5.5, Freenove FNK0104S / ESP32-S3R8, 8 MB octal PSRAM at 80 MHz, and a prepared FAT32 card on four-bit SDMMC. These versions describe the documented setup; compatibility with newer releases is not guaranteed.</p><a href="index.html#status">Read hardware test status and planned work ↗</a></header>
+
+      <section class="guide-section" id="installation"><p class="eyebrow">01 / Installation</p><h2>Begin with the complete example.</h2>
+        <ol class="guide-steps"><li><h3>Download the repository</h3><p><a href="https://github.com/herrdivad/ESPHomeSDCardServer/archive/refs/heads/master.zip">Download the master ZIP</a> and extract it on the machine running ESPHome. Keep <code>examples/fnk0104s-esp-idf.yaml</code>, <code>examples/assets/</code>, and <code>components/</code> in their original layout. The checkout must be accessible inside your ESPHome container if you use one.</p></li>
+        <li><h3>Prepare secrets and the SD card</h3><p>Copy <a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/examples/secrets.example.yaml">secrets.example.yaml</a> to <code>examples/secrets.yaml</code>. Replace the Wi-Fi placeholders and generate a random key locally, for example with <code>openssl rand -hex 32</code>. The API key must contain at least 32 UTF-8 bytes. Keep the file private and ignored by Git. Use a prepared FAT32 card and retain <code>format_if_mount_failed: false</code>.</p>
+        <div class="code-block"><div class="code-label"><span>examples/secrets.yaml · template only</span></div><pre><code>wifi_ssid: "YOUR_WIFI_SSID"
+wifi_password: "YOUR_WIFI_PASSWORD"
+sd_server_api_key: "REPLACE_WITH_YOUR_RANDOM_KEY"</code></pre></div></li>
+        <li><h3>Validate, compile, and flash</h3><p>With ESPHome 2026.8.0 installed, run from the repository root. Replace the serial port with your board’s port. Compilation does not need the actual JPEG/BIN files on the SD card; the local placeholder SVG must be available on the build machine.</p>
+        <div class="code-block"><div class="code-label"><span>Shell · repository root</span></div><pre><code>esphome config examples/fnk0104s-esp-idf.yaml
+esphome compile examples/fnk0104s-esp-idf.yaml
+esphome upload examples/fnk0104s-esp-idf.yaml --device /dev/ttyACM0</code></pre></div><p>Subsequent firmware updates use normal ESPHome OTA or the dashboard. The SD file upload endpoint does not flash firmware.</p></li>
+        <li><h3>Open the device and provision images</h3><p>After boot, open <code>http://fnk0104s-sd-server.local:8080/sd/</code> in your browser, or substitute the device IP address. Enter your API key, create the required folders, and upload files to the exact paths in <code>display_images.images</code>.</p><p>Missing initial images leave placeholders in the widgets while the file server still starts. Restart after provisioning to load every initial image, including static widgets. A widget with a Select can also load a newly uploaded image by selecting it. Upload alone does not assign it.</p></li></ol>
+        <aside class="notice"><strong>Keep the wiring and memory settings.</strong><p>The full example configures the display and backlight as well as a 16 KiB loop-task stack for JPEG decoding. The same board name does not imply identical wiring on another “CYD” device.</p></aside>
+      </section>
+
+      <section class="guide-section" id="configuration"><p class="eyebrow">02 / Configuration</p><h2>Choose your starting point.</h2><p>The <a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/examples/fnk0104s-esp-idf.yaml">full FNK0104S example</a> includes the LVGL display. For file management alone, use the complete minimal device configuration below, reproduced from the project README at build time.</p>
+        <details><summary>Complete minimal file-server YAML <span>Expand ↓</span></summary><div class="code-block"><div class="code-label"><span>Device YAML · file server only</span></div><pre><code>@@MINIMAL_CONFIG@@</code></pre></div></details>
+        <h3>Use the local component</h3><p>The example resolves <code>../components</code> relative to the device YAML. If you move the YAML, adjust this path to the directory containing <code>cyd_sd_http_server</code>.</p>
+        <div class="code-block"><div class="code-label"><span>YAML · external component</span></div><pre><code>external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [cyd_sd_http_server]</code></pre></div>
+        <h3>Or load the component from GitHub</h3><p>Replace the local <code>external_components</code> block with this Git source. <code>master</code> follows the development branch; pin a reviewed tag or commit for reproducible builds. Copy the full device example and its <code>assets/sd-image-placeholder.svg</code> separately.</p>
+        <div class="code-block"><div class="code-label"><span>YAML · alternative source</span></div><pre><code>external_components:
+  - source:
+      type: git
+      url: https://github.com/herrdivad/ESPHomeSDCardServer.git
+      ref: master
+    components: [cyd_sd_http_server]</code></pre></div>
+        <div class="table-wrap"><table><caption>Key server settings</caption><thead><tr><th scope="col">Setting</th><th scope="col">Default / requirement</th></tr></thead><tbody><tr><td><code>port</code></td><td>8080; independent of ESPHome’s web listener on 80</td></tr><tr><td><code>control_port</code></td><td>32769; the internal UDP control socket, distinct from other listeners</td></tr><tr><td><code>mount_point</code> / <code>url_prefix</code></td><td>Only <code>/sdcard</code> / <code>/sd</code> accepted</td></tr><tr><td><code>api_key</code></td><td>Required, at least 32 UTF-8 bytes</td></tr><tr><td><code>max_upload_size</code></td><td>200MB; configurable from 1 to 2,147,483,647 bytes. This is a limit, not tested throughput or a RAM reservation.</td></tr><tr><td><code>format_if_mount_failed</code></td><td><code>false</code>; keep this to avoid automatic formatting</td></tr><tr><td>Documented SDMMC pins</td><td>CLK 38 · CMD 40 · D0 39 · D1 41 · D2 48 · D3 47</td></tr></tbody></table></div>
+        <p>Schema support for one-bit SDMMC does not establish hardware support; four-bit operation on the documented FNK0104S is the test target.</p>
+      </section>
+
+      <section class="guide-section" id="images"><p class="eyebrow">03 / SD images</p><h2>Map names. Bind widgets.</h2><p>Add the following <code>display_images</code> block <strong>inside the existing <code>cyd_sd_http_server:</code> section</strong> of the full example. This reduced mapping uses the example’s <code>sd_display_image</code> widget; remove its other image mappings/widgets or retain them in your configuration.</p>
+        <div class="code-block"><div class="code-label"><span>YAML · optional component fragment</span></div><pre><code>  display_images:
+    drive_letter: S
+    cache:
+      max_size: 1MB
+      file_buffer_size: 16kB
+      memory: psram
+      strategy: lru
+    images:
+      - name: Image 1
+        path: /Image1.jpg
+      - name: Image 2
+        path: /images/Image2.jpg
+    widgets:
+      - image_widget: sd_display_image
+        initial_image: Image 1
+        fit: contain
+        select:
+          id: sd_display_image_select
+          name: Display image</code></pre></div>
+        <p>Each <code>image_widget</code> must refer to an existing, uniquely bound LVGL image widget. The full example supplies a 1 × 1 compiled SVG placeholder as its initial <code>src</code>. The component replaces that source during setup; no boot lambda is required. The legacy singular <code>display_image</code> configuration remains supported.</p>
+        <div class="table-wrap"><table><caption>Direct SD rendering formats</caption><thead><tr><th scope="col">Format</th><th scope="col">Support</th></tr></thead><tbody><tr><td><code>.jpg</code> / <code>.jpeg</code></td><td>Baseline JPEG through LVGL’s Tiny JPEG decoder</td></tr><tr><td><code>.bin</code></td><td>LVGL 9.5-compatible binary image assets; not arbitrary BIN files</td></tr><tr><td>PNG / progressive JPEG</td><td>Unsupported by the direct SD image path. Convert on your computer first.</td></tr></tbody></table></div>
+        <h3>What needs another build?</h3><p>Image names, paths, widget bindings, and Select options are compiled into firmware. Adding or changing them requires rebuilding and flashing. Replacing the file contents at an existing mapped path requires no rebuild; reselect the image or restart to load it. There is no runtime directory scan or HA image-list refresh button yet.</p>
+        <h3>Optional host-side conversion</h3><p>The <a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/add_tools/README.md">LVGL BIN converter</a> handles PNG/JPEG input, resizing, rotation, and transparent-background compositing on your computer. It requires Pillow, installed from <code>add_tools/requirements.txt</code>. This optional firmware asset tool is separate from the dependency-free website.</p>
+      </section>
+
+      <section class="guide-section" id="home-assistant"><p class="eyebrow">04 / Home Assistant</p><h2>Control each image independently.</h2><p>With the normal ESPHome <code>api:</code> connection, each widget can expose its own image control. Every control shares the compiled image list; changing one widget does not change the others.</p>
+        <div class="table-wrap"><table><caption>Per-widget control modes</caption><thead><tr><th scope="col">Configuration</th><th scope="col">Home Assistant interface</th></tr></thead><tbody><tr><td>Omit <code>select:</code></td><td>Static startup image; no image entity</td></tr><tr><td><code>select:</code></td><td>Image dropdown (<code>select.*</code>)</td></tr><tr><td><code>select:</code> with <code>hidden: true</code></td><td>Read-only text status (<code>sensor.*</code>) plus an image-selection action</td></tr></tbody></table></div>
+        <h3>Hidden Select for automations</h3><p>Inside a widget’s existing <code>select:</code> block, add <code>hidden: true</code>. The component generates the status sensor and native API action automatically. The original Select ID remains usable for local ESPHome automations. This is a presentation choice, not an access restriction.</p>
+        <div class="code-block"><div class="code-label"><span>YAML · replace this widget’s select block</span></div><pre><code>        select:
+          id: sd_display_image_select
+          name: Display image
+          hidden: true</code></pre></div>
+        <p>For the standard example, call the following action from HA. <code>option</code> must exactly match an allow-listed image name. HA prefixes the generated <code>cyd_sd_set_&lt;image_widget_id&gt;</code> action with the device name.</p>
+        <div class="code-block"><div class="code-label"><span>Home Assistant · action fragment</span></div><pre><code>action: esphome.fnk0104s_sd_server_cyd_sd_set_sd_display_image
+data:
+  option: Image 2</code></pre></div>
+        <p>Unknown names and detected file-access failures keep the previous source and status. The status confirms source assignment, not completion of a later streaming decode. The action has no result response; inspect status and logs. Reboot reloads <code>initial_image</code>; use an HA availability trigger if an automation should restore a selection.</p><p>Changing between visible and hidden mode requires rebuilding and flashing, changes the HA entity domain, and requires migrating existing automations and possibly removing stale HA entities. See the <a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/examples/fnk0104s-hidden-images.yaml">mixed-mode example</a>.</p>
+        <h3>Native PSRAM diagnostics</h3><p>Enabling image support automatically creates six byte-valued diagnostic sensors: PSRAM total, free, and largest free block; cache limit, used, and reclaimable. A <strong>Release Unused SD Image Cache</strong> button frees only frames assigned to no widget. Assigned images remain visible, including on hidden pages.</p><p>Values are checked every 10 seconds and after selections and releases; unchanged values are not republished. HA can plot recorded sensor history. The device-wide free PSRAM value includes other components; cache-used counts decoded RGB565 pixel buffers only.</p>
+      </section>
+
+      <section class="guide-section" id="caching"><p class="eyebrow">05 / Cache & scaling</p><h2>Budget memory deliberately.</h2><p>The decoded cache defaults to <code>max_size: 1MB</code>, configurable from 0 to 4 MB. It allocates RGB565 buffers only in PSRAM, on demand. The budget is not preallocated and cannot guarantee that a sufficiently large contiguous block exists.</p><p>Entries are shared by SD path. LRU eviction protects every frame still assigned to a widget. A 320 × 480 image uses 307,200 decoded bytes; three fit in the default budget. Scaling a source into several widgets does not add a second decoded source buffer or reduce its memory cost.</p>
+        <div class="table-wrap"><table><caption>Per-widget fit modes</caption><thead><tr><th scope="col">Mode</th><th scope="col">Behavior</th></tr></thead><tbody><tr><td>Omitted / <code>none</code></td><td>Unscaled placement; smaller widgets can crop the source</td></tr><tr><td><code>contain</code></td><td>Preserve aspect ratio; show the full image, centered</td></tr><tr><td><code>cover</code></td><td>Preserve aspect ratio; fill the widget and possibly crop edges</td></tr><tr><td><code>stretch</code></td><td>Fill both dimensions; aspect ratio may change</td></tr></tbody></table></div>
+        <p>Fitted widgets require a successful decoded cache entry. If allocation or decoding fails, they keep their previous image and Select state. Unscaled widgets can fall back to direct <code>S:/</code> streaming. Set <code>max_size: 0</code> to disable decoded caching and omit <code>fit</code> when using that path.</p><p>The separate <code>file_buffer_size: 16kB</code> cache belongs to each open LVGL file and combines small reads. Setting it to 0 disables file-read caching. Cache hits avoid reading and decoding the image body, but still probe file availability and perform normal LVGL drawing. Uploading or deleting a mapped file invalidates its decoded generation; reselect to load changed content.</p><p>Adding <code>fit</code> enables LVGL RGB565A8 software transform support at compile time and requires a rebuild and flash. The maintainer confirmed <code>contain</code> scaling and shared-buffer behavior; detailed <code>cover</code>, <code>stretch</code>, eviction, and failure cases remain open in the hardware matrix.</p>
+      </section>
+
+      <section class="guide-section" id="api"><p class="eyebrow">06 / HTTP API</p><h2>A small API for your own tools.</h2><p>Every <code>/sd/api/*</code> request requires <code>X-API-Key</code>. Use virtual paths relative to the SD root, such as <code>/photos/photo.jpg</code>, and URL-encode query values. Do not send internal <code>/sdcard/…</code> or LVGL <code>S:/…</code> paths.</p>
+        <div class="table-wrap"><table class="api-table"><caption>Implemented endpoints</caption><thead><tr><th scope="col">Method</th><th scope="col">Endpoint</th><th scope="col">Purpose</th></tr></thead><tbody>@@API_ROWS@@</tbody></table></div>
+        <h3>Authenticate and check health</h3><p>These examples use Bash. Read the key without putting its literal value into shell history.</p>
+        <div class="code-block"><div class="code-label"><span>Bash · device on your trusted LAN</span></div><pre><code>SD_BASE_URL='http://fnk0104s-sd-server.local:8080'
+read -r -s -p 'SD API key: ' SD_API_KEY
+export SD_API_KEY
+curl --fail-with-body --show-error \
+  -H "X-API-Key: $SD_API_KEY" "$SD_BASE_URL/sd/api/health"</code></pre></div>
+        <h3>Create a folder and upload a raw file</h3><p>Create parents first; skip folder creation if it already exists. Uploads require an explicit <code>Content-Length</code> and <code>application/octet-stream</code>. Use a regular input file so curl supplies the length. Multipart and chunked uploads are unsupported.</p>
+        <div class="code-block"><div class="code-label"><span>Bash · creates /photos and uploads photo.jpg</span></div><pre><code>curl --fail-with-body --show-error -X POST \
+  -H "X-API-Key: $SD_API_KEY" \
+  "$SD_BASE_URL/sd/api/directory?path=%2Fphotos"
+
+curl --fail-with-body --show-error \
+  -H "X-API-Key: $SD_API_KEY" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @./photo.jpg \
+  "$SD_BASE_URL/sd/api/file?path=%2Fphotos%2Fphoto.jpg&amp;overwrite=false"</code></pre></div>
+        <h3>Stream and verify with Python</h3><p>The repository’s uploader uses the Python standard library. It reads <code>SD_API_KEY</code> or prompts without echo. <code>--verify</code> downloads to a temporary local file and compares SHA-256; it keeps the remote upload. Add <code>--overwrite</code> only for an intended replacement.</p>
+        <div class="code-block"><div class="code-label"><span>Shell · repository root, after creating /photos</span></div><pre><code>python3 scripts/upload_file.py \
+  http://fnk0104s-sd-server.local:8080 ./photo.jpg /photos/photo.jpg --verify</code></pre></div>
+        <p>The device streams uploads and downloads in 8 KiB blocks; it does not buffer entire transfers in RAM or PSRAM. Browser downloads currently build a Blob on the client, so browser memory use is separate. One upload is allowed at a time. The API lists up to 100 entries per page with <code>offset</code> and <code>limit</code>; the current WebUI shows the first 100 and directs you to the API for further pages.</p><p>Errors use a JSON envelope with operation, path, and machine-readable error details. Downloads instead return the file body and exact <code>Content-Length</code>. Common statuses include 401 for authentication, 409 for conflicts, 411 for missing length, 413 for excessive size, 503 for unavailable storage, and 507 for insufficient space.</p>
+      </section>
+
+      <section class="guide-section" id="security"><p class="eyebrow">07 / Security & limits</p><h2>Keep it on a trusted network.</h2><p><strong>HTTP sends the API key and file data in clear text.</strong> Use a trusted, segmented LAN, firewall port 8080, and never expose the device to the public internet. There is no TLS, per-user authorization, or brute-force throttling. The website you are reading is static documentation; device credentials belong only in the device WebUI or your local tools.</p><p>The component implements centralized path validation, a constant-work API-key comparison, synchronized storage with active-reader protection, free-space checks, a configurable upload limit, temporary-file staging, checked writes and finalization, and recoverable overwrite backups. The embedded same-origin UI uses no CDN and holds its API key in <code>sessionStorage</code>.</p><p>These safeguards are implemented, but FATFS is not transactional. Boot recovery attempts to restore interrupted overwrite backups and remove stale uploads; it cannot guarantee integrity during power loss, corruption, or physical card failure. Keep independent backups. Systematic failure, concurrency, and endurance testing remain pending.</p><ul><li>No recursive directory creation or deletion; delete only empty folders.</li><li>No hotplug; power down before removing the card.</li><li>No Arduino framework, other boards, or SPI SD support.</li><li>No PNG/progressive JPEG decoding in the direct image path.</li><li>Directory timestamps are best effort without configured time synchronization.</li><li>Directory/wildcard image discovery and MP3 playback are plans only.</li></ul>
+      </section>
+
+      <section class="guide-section" id="troubleshooting"><p class="eyebrow">08 / Troubleshooting</p><h2>Check the path, then the logs.</h2><details><summary>The image is still a placeholder</summary><p>Verify the SD mount, exact allow-listed name/path, and baseline JPEG or compatible BIN format. Create parent folders before upload. Uploading an image does not automatically assign it: reselect it or restart. Static widgets load their initial image at startup.</p></details><details><summary>A fitted image will not change</summary><p>Check PSRAM free space, its largest free block, and the cache budget. Fitted widgets require the full decoded frame. They deliberately keep the previous image if caching fails. Keep <code>loop_task_stack_size: 16384</code> and rebuild after enabling <code>fit</code>.</p></details><details><summary>An upload or delete returns 409</summary><p>An upload is already active, the target exists without overwrite permission, or an active reader conflicts with the operation. Wait for the operation to finish and opt into overwriting only when intended.</p></details><details><summary>Uncached image selection takes noticeable time</summary><p>The first load reads and decodes from SD. The maintainer observed occasional computation warnings of roughly 150–850 ms. Cache hits avoid decoding the body but still redraw through LVGL and the display bus. No universal latency or throughput guarantee is claimed.</p></details><details><summary>The SD card does not mount</summary><p>Check FAT32 preparation, documented GPIO wiring, suitable pull-ups, and the power supply. Keep <code>format_if_mount_failed: false</code>; formatting is not a safe diagnostic step for a card containing data.</p></details></section>
+
+      <section class="guide-section" id="references"><p class="eyebrow">09 / Source documents</p><h2>Follow the implementation.</h2><ul class="reference-list"><li><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/README.md">README: current capabilities, limitations, and maintainer test reports ↗</a></li><li><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/docs/DIRECT_SD_IMAGE_WORKFLOW.md">Direct SD image workflow: mapping, boot, storage, and cache architecture ↗</a></li><li><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/docs/HARDWARE_TEST_MATRIX.md">Detailed hardware test matrix ↗</a></li><li><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/docs/BUILD_ENVIRONMENT.md">Historical build environment record ↗</a></li><li><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/docs/DESIGN_DECISIONS.md">Original design decisions and open hardware questions ↗</a></li><li><a href="https://github.com/herrdivad/ESPHomeSDCardServer/tree/master/components/cyd_sd_http_server">Component source: schema, HTTP, storage, and image control ↗</a></li><li><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/future_patches.md">Roadmap: completed work and proposed image discovery ↗</a></li><li><a href="https://github.com/herrdivad/ESPHomeSDCardServer/blob/master/docs/PlayMP3AudioPlan.md">MP3 playback: planning only ↗</a></li></ul><p>Older plans and build records are historical. The README’s current test summary takes precedence where later maintainer results exist.</p></section>
+    </article>
+  </main>
+  @@FOOTER@@
+</body>
+</html>

@@ -834,3 +834,34 @@ boot. These safeguards cannot guarantee data integrity during power loss,
 filesystem corruption, or physical card failure. Fault-injection and recovery
 tests on the real card and deployed IDF build remain pending. Keep independent
 backups. Directory timestamps are best-effort without configured system time.
+
+## Project website
+
+A responsive, English GitHub Pages landing page and technical guide are provided
+under `website/`. They reuse the original screenshots and real hardware photo in
+`examples/`, distinguish
+implemented features from maintainer hardware reports and planned work, and use
+system fonts without external runtime dependencies. The example screenshots and
+photos are owned and/or created by the maintainer; any AI-assisted work was
+created under the maintainer's direction. The component and example
+firmware configurations are unchanged by the website.
+
+Build and check the site using Python's standard library:
+
+```bash
+python3 scripts/build_website.py
+python3 scripts/check_website.py
+```
+
+See [Website maintenance and deployment](docs/WEBSITE.md) for local preview,
+content sources, and GitHub Pages setup. After human approval and a push to
+`master`, `.github/workflows/pages.yml` deploys the generated `build/pages/`
+artifact. Pull requests run website checks without deploying. Preparing the
+website files alone does not publish it.
+
+The owner's [legal notice](https://david-herrmann.net/impressum.html) is linked
+from the website footer. The original hardware photo and generated copies have
+been stripped of JPEG metadata without changing image pixels. The build retains
+this sanitization and the checker rejects metadata in replacement source photos.
+See [Website dependencies and publication considerations](docs/WEBSITE_DEPENDENCIES.md)
+for JavaScript, packages, licenses, cookies, and hosting details.
